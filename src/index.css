@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import 'tailwindcss';
+
+@layer base {
+  :root {
+    --bg-obsidian: #080B10;
+    --bg-slate: #111621;
+    --accent-volt: #D4FF00;
+    --accent-ptt: #FF4D2A;
+    --accent-spotify: #1DB954;
+    --accent-cyan: #00F0FF;
+  }
+
+  body {
+    background-color: #080B10;
+    color: #F8FAFC;
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    overflow-x: hidden;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+.font-display {
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+.font-mono-tech {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums-strict {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.85;
+  }
+  70% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.85);
+    opacity: 0;
+  }
+}
+
+.animate-ptt-ring {
+  animation: pulse-ring 1.35s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+@keyframes route-dash {
+  to {
+    stroke-dashoffset: -48;
+  }
+}
+
+.animate-route-flow {
+  animation: route-dash 1.8s linear infinite;
+}
+
+/* Custom subtle scrollbars for telemetry logs */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 20, 30, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 255, 0, 0.45);
+}
