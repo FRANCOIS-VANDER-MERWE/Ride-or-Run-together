@@ -1,11 +1,16 @@
-// Pure Web Audio API tactical audio cues for Walkie-Talkie PTT & Broadcast alerts
+import { Platform } from 'react-native';
+import * as Haptics from 'expo-haptics';
+
+// Web Audio API fallback when running on Expo Web; Haptics on iOS / Android
 let audioCtx: AudioContext | null = null;
 
-function getAudioContext(): AudioContext | null {
-  if (typeof window === 'undefined') return null;
+function getWebAudioContext(): AudioContext | null {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
   if (!audioCtx) {
     const AudioContextClass =
-      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
     if (AudioContextClass) {
       audioCtx = new AudioContextClass();
     }
@@ -17,8 +22,12 @@ function getAudioContext(): AudioContext | null {
 }
 
 export function playPttOpenChirp(enabled = true) {
+  if (Platform.OS !== 'web') {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+  }
   if (!enabled) return;
-  const ctx = getAudioContext();
+
+  const ctx = getWebAudioContext();
   if (!ctx) return;
 
   try {
@@ -26,7 +35,6 @@ export function playPttOpenChirp(enabled = true) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    // Classic tactical two-step PTT chirp (1560Hz -> 1920Hz)
     osc.type = 'sine';
     osc.frequency.setValueAtTime(1560, now);
     osc.frequency.setValueAtTime(1920, now + 0.045);
@@ -47,8 +55,12 @@ export function playPttOpenChirp(enabled = true) {
 }
 
 export function playPttCloseSquelch(enabled = true) {
+  if (Platform.OS !== 'web') {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+  }
   if (!enabled) return;
-  const ctx = getAudioContext();
+
+  const ctx = getWebAudioContext();
   if (!ctx) return;
 
   try {
@@ -56,7 +68,6 @@ export function playPttCloseSquelch(enabled = true) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    // Descending acknowledgement tone
     osc.type = 'triangle';
     osc.frequency.setValueAtTime(1320, now);
     osc.frequency.setValueAtTime(980, now + 0.04);
@@ -70,13 +81,19 @@ export function playPttCloseSquelch(enabled = true) {
     osc.start(now);
     osc.stop(now + 0.095);
   } catch {
-    // Ignore audio context restrictions
+    // Ignore
   }
 }
 
 export function playSyncBroadcastPulse(enabled = true) {
+  if (Platform.OS !== 'web') {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+      () => {}
+    );
+  }
   if (!enabled) return;
-  const ctx = getAudioContext();
+
+  const ctx = getWebAudioContext();
   if (!ctx) return;
 
   try {

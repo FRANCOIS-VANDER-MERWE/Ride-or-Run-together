@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "PACELOCK · Ride or Run Together",
+    "slug": "ride-or-run-together",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#080B10",
+    "primaryColor": "#D4FF00",
+    "scheme": "pacelock",
+    "experiments": {
+      "reactCompiler": true
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "run.pacelock.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "PACELOCK uses your live GPS location to display your position and speed on the shared pack route line.",
+        "NSMicrophoneUsageDescription": "PACELOCK uses your microphone when you hold the Walkie-Talkie Push-To-Talk button."
+      }
+    },
+    "android": {
+      "package": "run.pacelock.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow PACELOCK to access your location for live pack telemetry."
+        }
+      ],
+      "expo-sqlite",
+      "expo-font",
+      "expo-asset"
+    ]
+  }
+}

@@ -1,5 +1,14 @@
 import React, { useState } from 'react';
 import {
+  View,
+  Text,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Platform,
+} from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import {
   Database,
   Server,
   Smartphone,
@@ -10,22 +19,36 @@ import {
   Radio,
   Music,
   MapPin,
-  CheckCircle2,
   Copy,
   Check,
-} from 'lucide-react';
+  CheckCircle2,
+} from './Icons';
+import { isSupabaseConfigured } from '../services/supabaseClient';
+import { walkieTalkieController } from '../services/liveKitVoiceService';
 
 type BlueprintTab = 'overview' | 'database' | 'apis' | 'code';
+
+const MONO_FONT = Platform.select({
+  ios: 'Menlo',
+  android: 'monospace',
+  default: 'monospace',
+});
 
 export default function ArchitectureBlueprintView() {
   const [activeTab, setActiveTab] = useState<BlueprintTab>('overview');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const handleCopy = (id: string, text: string) => {
-    navigator.clipboard?.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1800);
+  const handleCopy = async (id: string, text: string) => {
+    try {
+      await Clipboard.setStringAsync(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1800);
+    } catch {
+      // Ignore clipboard errors
+    }
   };
+
+  const liveKitStatus = walkieTalkieController.getStatus();
 
   const supabaseSchemaSql = `-- SUPABASE POSTGRES SCHEMA FOR PACELOCK (RUN & RIDE TOGETHER)
 CREATE TABLE public.users (
@@ -62,7 +85,7 @@ CREATE TABLE public.friends (
   const customBroadcastTranslatorCode = `// CUSTOM BROADCAST API -> CLIENT SPOTIFY API TRANSLATION (Expo + TypeScript + Supabase)
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(process.env.EXPO_PUBLIC_SUPABASE_URL!, process.env.EXPO_PUBLIC_SUPABASE_KEY!);
+const supabase = createClient(process.env.EXPO_PUBLIC_SUPABASE_URL!, process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!);
 
 // 1. Host broadcasts custom music sync packet to everyone in the active session
 export async function broadcastMusicSyncSignal(sessionId: string, trackUri: string, positionMs: number) {
@@ -84,11 +107,9 @@ export function subscribeAndTranslateToSpotify(sessionId: string, userSpotifyAcc
   return supabase
     .channel(\`pack-session:\${sessionId}\`)
     .on('broadcast', { event: 'CUSTOM_SPOTIFY_SYNC' }, async ({ payload }) => {
-      // Calculate network transit drift so all runners/riders hear the exact same beat
       const networkDriftMs = Math.max(0, Date.now() - payload.sent_at_epoch_ms);
       const compensatedPositionMs = payload.position_ms + networkDriftMs;
 
-      // Translate custom signal -> Official Spotify Web API Player endpoint
       await fetch('https://api.spotify.com/v1/me/player/play', {
         method: 'PUT',
         headers: {
@@ -105,18 +126,13 @@ export function subscribeAndTranslateToSpotify(sessionId: string, userSpotifyAcc
 }`;
 
   const liveKitPttCode = `// LIVEKIT CLOUD WALKIE-TALKIE PUSH-TO-TALK (Expo React Native + LiveKit SDK)
-import { Room, RoomEvent } from 'livekit-client';
+import { Room } from 'livekit-client';
 
 export class PackWalkieTalkieController {
-  private room: Room;
-
-  constructor() {
-    this.room = new Room({ adaptiveStream: true, dynacast: true });
-  }
+  private room = new Room({ adaptiveStream: true, dynacast: true });
 
   async connectToPackRoom(livekitUrl: string, tokenFromFastApi: string) {
     await this.room.connect(livekitUrl, tokenFromFastApi);
-    // Start with mic muted until user holds the Push-To-Talk button on phone
     await this.room.localParticipant.setMicrophoneEnabled(false);
   }
 
@@ -134,326 +150,309 @@ export class PackWalkieTalkieController {
 }`;
 
   return (
-    <div className="space-y-5">
+    <View style={styles.container}>
       {/* Top Sub-Navigation Banner */}
-      <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="px-2 py-0.5 rounded bg-[#D4FF00]/15 text-[#D4FF00] border border-[#D4FF00]/30 text-[11px] font-mono-tech font-bold uppercase">
-              SYSTEM ARCHITECTURE &amp; TEAM SPEC
-            </span>
-            <span className="text-xs font-mono-tech text-slate-400">
+      <View style={styles.bannerCard}>
+        <View style={styles.bannerTitleBlock}>
+          <View style={styles.bannerBadgeRow}>
+            <View style={styles.specBadge}>
+              <Text style={styles.specBadgeText}>
+                SYSTEM ARCHITECTURE &amp; TEAM SPEC
+              </Text>
+            </View>
+            <Text style={styles.stackSubtitle}>
               Expo React Native · TypeScript · Supabase · FastAPI · LiveKit · Spotify
-            </span>
-          </div>
-          <h2 className="font-display font-bold text-lg sm:text-xl text-white mt-1">
+            </Text>
+          </View>
+          <Text style={styles.bannerTitle}>
             Run &amp; Ride Together — Complete Technical Blueprint
-          </h2>
-        </div>
+          </Text>
+        </View>
 
-        <div className="flex flex-wrap items-center gap-1.5 bg-[#080B10] p-1.5 rounded-xl border border-white/10">
+        {/* Live Environment / Service SDK Readiness Strip */}
+        <View style={styles.envStrip}>
+          <View style={styles.envPill}>
+            <CheckCircle2
+              size={12}
+              color={isSupabaseConfigured ? '#10B981' : '#D4FF00'}
+            />
+            <Text style={styles.envPillText}>
+              Supabase SDK:{' '}
+              {isSupabaseConfigured ? 'Connected' : 'Ready (.env fallback active)'}
+            </Text>
+          </View>
+          <View style={styles.envPill}>
+            <CheckCircle2 size={12} color="#FF4D2A" />
+            <Text style={styles.envPillText}>
+              LiveKit PTT: {liveKitStatus.serverRegion}
+            </Text>
+          </View>
+        </View>
+
+        {/* Sub-Tabs */}
+        <View style={styles.tabsRow}>
           {(
             [
               { id: 'overview', label: 'Roles & Stack', icon: Layers },
               { id: 'database', label: 'Supabase Tables', icon: Database },
               { id: 'apis', label: 'API Mesh & Flows', icon: Server },
-              { id: 'code', label: 'Implementation Code', icon: Code2 },
+              { id: 'code', label: 'Code Snippets', icon: Code2 },
             ] as const
           ).map((t) => {
             const Icon = t.icon;
             const active = activeTab === t.id;
             return (
-              <button
+              <Pressable
                 key={t.id}
-                onClick={() => setActiveTab(t.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-mono-tech uppercase font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                  active
-                    ? 'bg-[#D4FF00] text-[#080B10]'
-                    : 'text-slate-400 hover:text-white'
-                }`}
+                onPress={() => setActiveTab(t.id)}
+                style={[styles.tabBtn, active && styles.tabBtnActive]}
               >
-                <Icon className="w-3.5 h-3.5" />
-                <span>{t.label}</span>
-              </button>
+                <Icon size={13} color={active ? '#080B10' : '#94A3B8'} />
+                <Text
+                  style={[
+                    styles.tabBtnText,
+                    active && styles.tabBtnTextActive,
+                  ]}
+                >
+                  {t.label}
+                </Text>
+              </Pressable>
             );
           })}
-        </div>
-      </div>
+        </View>
+      </View>
 
       {/* TAB 1: ROLES, LANGUAGES, TOOLS & FEATURES BREAKDOWN */}
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Languages, Tools & Software Card */}
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5 space-y-4">
-            <div className="flex items-center gap-2.5">
-              <GitBranch className="w-5 h-5 text-[#D4FF00]" />
-              <h3 className="font-display font-bold text-base text-white">
+        <View style={styles.sectionGrid}>
+          <View style={styles.infoCard}>
+            <View style={styles.cardHeaderRow}>
+              <GitBranch size={18} color="#D4FF00" />
+              <Text style={styles.cardTitle}>
                 Languages, Tools &amp; Software Stack
-              </h3>
-            </div>
+              </Text>
+            </View>
 
-            <div className="space-y-3 text-xs">
-              <div className="p-3 rounded-xl bg-[#080B10] border border-white/10">
-                <div className="font-mono-tech uppercase text-[#D4FF00] font-bold mb-1">
-                  Languages &amp; Core Frameworks
-                </div>
-                <p className="text-slate-300 leading-relaxed">
-                  • <strong>Expo + React Native (TypeScript)</strong> for cross-platform iOS &amp; Android app + iOS ActivityKit Live Activities
-                  <br />• <strong>SQL / PostgreSQL</strong> in Supabase with Row Level Security (RLS)
-                  <br />• <strong>Python (FastAPI / RESTful API)</strong> for LiveKit token minting, Spotify OAuth refresh, and custom broadcast validation
-                </p>
-              </div>
+            <View style={styles.subBox}>
+              <Text style={[styles.subBoxHeading, { color: '#D4FF00' }]}>
+                LANGUAGES &amp; CORE FRAMEWORKS
+              </Text>
+              <Text style={styles.subBoxBody}>
+                • Expo + React Native (TypeScript) for cross-platform iOS, Android &amp; Web + iOS ActivityKit Live Activities{'\n'}
+                • SQL / PostgreSQL in Supabase with Row Level Security (RLS){'\n'}
+                • Python (FastAPI / RESTful API) for LiveKit token minting, Spotify OAuth refresh &amp; custom broadcast validation
+              </Text>
+            </View>
 
-              <div className="p-3 rounded-xl bg-[#080B10] border border-white/10">
-                <div className="font-mono-tech uppercase text-[#00F0FF] font-bold mb-1">
-                  Developer Tools &amp; Workflow
-                </div>
-                <p className="text-slate-300 leading-relaxed">
-                  • <strong>Claude &amp; ChatGPT</strong>: AI pair-programming, API schema generation, &amp; edge-case debugging
-                  <br />• <strong>GitHub &amp; SourceTree</strong>: Git branch management, PR reviews, visual commit graph
-                  <br />• <strong>RESTful API / FastAPI + Postman</strong>: Endpoint testing for custom Spotify broadcast signals
-                </p>
-              </div>
+            <View style={styles.subBox}>
+              <Text style={[styles.subBoxHeading, { color: '#00F0FF' }]}>
+                DEVELOPER TOOLS &amp; WORKFLOW
+              </Text>
+              <Text style={styles.subBoxBody}>
+                • Claude &amp; ChatGPT: AI pair-programming, API schema generation &amp; edge-case debugging{'\n'}
+                • GitHub &amp; SourceTree: Git branch management, PR reviews, visual commit graph{'\n'}
+                • RESTful API / FastAPI + Postman: Endpoint testing for custom Spotify broadcast signals
+              </Text>
+            </View>
 
-              <div className="p-3 rounded-xl bg-[#080B10] border border-white/10">
-                <div className="font-mono-tech uppercase text-emerald-400 font-bold mb-1">
-                  Authentication (Supabase Auth)
-                </div>
-                <p className="text-slate-300 leading-relaxed">
-                  • Email/Password + Spotify OAuth2 PKCE handshake stored securely in <code>public.users.spotify_credentials</code> with JWT session persistence via <code>@react-native-async-storage/async-storage</code>.
-                </p>
-              </div>
-            </div>
-          </div>
+            <View style={styles.subBox}>
+              <Text style={[styles.subBoxHeading, { color: '#10B981' }]}>
+                AUTHENTICATION (SUPABASE AUTH)
+              </Text>
+              <Text style={styles.subBoxBody}>
+                • Email/Password + Spotify OAuth2 PKCE handshake stored securely in public.users.spotify_credentials with JWT session persistence via expo-sqlite/localStorage/install.
+              </Text>
+            </View>
+          </View>
 
-          {/* Frontend Role & Screens Card */}
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5 space-y-4">
-            <div className="flex items-center gap-2.5">
-              <Smartphone className="w-5 h-5 text-[#00F0FF]" />
-              <h3 className="font-display font-bold text-base text-white">
+          <View style={styles.infoCard}>
+            <View style={styles.cardHeaderRow}>
+              <Smartphone size={18} color="#00F0FF" />
+              <Text style={styles.cardTitle}>
                 Role: Frontend Engineering (Expo + TS)
-              </h3>
-            </div>
+              </Text>
+            </View>
 
-            <div className="space-y-3 text-xs">
-              <div className="p-3 rounded-xl bg-[#080B10] border border-white/10">
-                <div className="font-mono-tech uppercase text-white font-bold mb-1">
-                  1. Application Screens
-                </div>
-                <ul className="space-y-1 text-slate-300">
-                  <li>• <strong>Auth &amp; Spotify Link Screen</strong>: Supabase login + Spotify OAuth connect</li>
-                  <li>• <strong>Lobby &amp; Pack Squad Screen</strong>: Invite friends from <code>friends</code> table, choose Run or Ride mode &amp; route</li>
-                  <li>• <strong>Live Cockpit Screen</strong>: Vector Google Map + Top Linear Progress Line + PTT Paddle + Spotify Deck</li>
-                  <li>• <strong>iOS Lock Screen Live Activity</strong>: PFP avatars on linear route bar via <code>expo-live-activities</code></li>
-                </ul>
-              </div>
+            <View style={styles.subBox}>
+              <Text style={[styles.subBoxHeading, { color: '#FFFFFF' }]}>
+                1. APPLICATION SCREENS &amp; BOTTOM TABS
+              </Text>
+              <Text style={styles.subBoxBody}>
+                • Cockpit Tab: Live Activity PFP Line + 2x2 Telemetry Stats + Quick PTT/Spotify Docks{'\n'}
+                • Tactical Map Tab: Interactive SVG Route Map + Road Conditions + Hazard Pin Drawer{'\n'}
+                • Walkie-Talkie PTT Tab: Tactile Hold-to-Talk Paddle + Hands-Free Latch + LiveKit Feed{'\n'}
+                • Spotify Sync Tab: Synchronized Cadence Player + Custom Broadcast API Translator
+              </Text>
+            </View>
 
-              <div className="p-3 rounded-xl bg-[#080B10] border border-white/10">
-                <div className="font-mono-tech uppercase text-white font-bold mb-1">
-                  2. Connecting Front &amp; Back End
-                </div>
-                <ul className="space-y-1 text-slate-300">
-                  <li>• <strong>Supabase Realtime Channels</strong>: Subscribes to 5Hz GPS coordinates &amp; custom music broadcast events</li>
-                  <li>• <strong>RESTful FastAPI Client</strong>: Requests short-lived LiveKit room tokens &amp; refreshes Spotify bearer tokens</li>
-                  <li>• <strong>Client-Side Spotify Translator</strong>: Listens for custom broadcast packets and calls <code>PUT /v1/me/player/play</code></li>
-                </ul>
-              </div>
-            </div>
-          </div>
+            <View style={styles.subBox}>
+              <Text style={[styles.subBoxHeading, { color: '#FFFFFF' }]}>
+                2. CONNECTING FRONT &amp; BACK END
+              </Text>
+              <Text style={styles.subBoxBody}>
+                • Supabase Realtime Channels: Subscribes to 5Hz GPS coordinates &amp; custom music broadcast events{'\n'}
+                • RESTful FastAPI Client: Requests short-lived LiveKit room tokens &amp; refreshes Spotify bearer tokens{'\n'}
+                • Client-Side Spotify Translator: Listens for custom broadcast packets and calls PUT /v1/me/player/play
+              </Text>
+            </View>
+          </View>
 
-          {/* Backend Role & Features Matrix Card */}
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5 space-y-4">
-            <div className="flex items-center gap-2.5">
-              <Database className="w-5 h-5 text-[#1DB954]" />
-              <h3 className="font-display font-bold text-base text-white">
-                Role: Backend, Database &amp; Features
-              </h3>
-            </div>
+          <View style={styles.infoCard}>
+            <View style={styles.cardHeaderRow}>
+              <Database size={18} color="#1DB954" />
+              <Text style={styles.cardTitle}>
+                Role: Backend, Database &amp; 5 Core Features
+              </Text>
+            </View>
 
-            <div className="space-y-3 text-xs">
-              <div className="p-3 rounded-xl bg-[#080B10] border border-white/10">
-                <div className="font-mono-tech uppercase text-[#1DB954] font-bold mb-1">
-                  Building Database (Supabase)
-                </div>
-                <ul className="space-y-1 text-slate-300">
-                  <li>• <strong>Users Table</strong>: <code>username</code>, <code>password</code>, <code>spotify_credentials</code>, <code>friend_list</code></li>
-                  <li>• <strong>Playlists Table</strong>: BPM-tagged run/ride playlists &amp; track URIs</li>
-                  <li>• <strong>Friends Table</strong>: Bidirectional friend graph &amp; online pack status</li>
-                </ul>
-              </div>
+            <View style={styles.subBox}>
+              <Text style={[styles.subBoxHeading, { color: '#1DB954' }]}>
+                BUILDING DATABASE (SUPABASE)
+              </Text>
+              <Text style={styles.subBoxBody}>
+                • Users Table: username, password, spotify_credentials, friend_list{'\n'}
+                • Playlists Table: BPM-tagged run/ride playlists &amp; track URIs{'\n'}
+                • Friends Table: Bidirectional friend graph &amp; online pack status
+              </Text>
+            </View>
 
-              <div className="p-3 rounded-xl bg-[#080B10] border border-white/10">
-                <div className="font-mono-tech uppercase text-[#FF4D2A] font-bold mb-1">
-                  5 Core Feature Modules
-                </div>
-                <ul className="space-y-1 text-slate-300">
-                  <li>• <strong>Map</strong>: Google Maps SDK + Geolocation 5Hz polyline &amp; pack tethers</li>
-                  <li>• <strong>Music</strong>: Custom Broadcast API -&gt; per-phone Spotify API translator</li>
-                  <li>• <strong>Walkie-Talkie</strong>: LiveKit Cloud push-to-talk call-to-call voice mesh</li>
-                  <li>• <strong>Conditions</strong>: Live road surface, grade %, wind &amp; traffic hazard pins</li>
-                  <li>• <strong>Stats</strong>: Real-time Speed (MPH/Pace), % Done, ETA &amp; Pack Gap</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        </div>
+            <View style={styles.subBox}>
+              <Text style={[styles.subBoxHeading, { color: '#FF4D2A' }]}>
+                5 CORE FEATURE MODULES
+              </Text>
+              <Text style={styles.subBoxBody}>
+                • Map: expo-location 5Hz GPS + Google Maps road condition polyline &amp; draft tethers{'\n'}
+                • Music: Custom Broadcast API -&gt; per-phone Spotify API translator{'\n'}
+                • Walkie-Talkie: LiveKit Cloud push-to-talk call-to-call voice mesh{'\n'}
+                • Conditions: Live road surface, grade %, wind &amp; traffic hazard pins{'\n'}
+                • Stats: Real-time Speed (MPH/Pace), % Done, ETA &amp; Pack Gap
+              </Text>
+            </View>
+          </View>
+        </View>
       )}
 
       {/* TAB 2: SUPABASE DATABASE TABLES EXPLORER */}
       {activeTab === 'database' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Table 1: Users Table */}
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-mono-tech text-xs font-bold text-[#D4FF00] uppercase">
-                TABLE 1 · public.users
-              </span>
-              <span className="px-2 py-0.5 rounded bg-white/10 text-[10px] font-mono-tech text-slate-300">
-                RLS ENABLED
-              </span>
-            </div>
-            <div className="space-y-2 text-xs font-mono-tech">
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">id</span>
-                <span className="text-cyan-400">UUID (PK · auth.users)</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">username</span>
-                <span className="text-emerald-400">TEXT UNIQUE NOT NULL</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">password</span>
-                <span className="text-amber-400">TEXT (bcrypt hash)</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-[#1DB954]/40 flex justify-between">
-                <span className="text-[#1DB954] font-bold">spotify_credentials</span>
-                <span className="text-[#1DB954]">JSONB (OAuth tokens)</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">friend_list</span>
-                <span className="text-purple-400">UUID[] (Array of IDs)</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Table 2: Playlists Table */}
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-mono-tech text-xs font-bold text-[#1DB954] uppercase">
-                TABLE 2 · public.playlists
-              </span>
-              <span className="px-2 py-0.5 rounded bg-white/10 text-[10px] font-mono-tech text-slate-300">
-                SPOTIFY URI SYNC
-              </span>
-            </div>
-            <div className="space-y-2 text-xs font-mono-tech">
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">id</span>
-                <span className="text-cyan-400">UUID (PK)</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">owner_id</span>
-                <span className="text-slate-400">UUID FK -&gt; users.id</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">spotify_playlist_uri</span>
-                <span className="text-[#1DB954]">TEXT (spotify:playlist:...)</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">target_bpm</span>
-                <span className="text-[#D4FF00]">INT4 (e.g. 170 BPM)</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">tracks</span>
-                <span className="text-purple-400">JSONB (Track Queue)</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Table 3: Friends Table */}
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-mono-tech text-xs font-bold text-[#00F0FF] uppercase">
-                TABLE 3 · public.friends
-              </span>
-              <span className="px-2 py-0.5 rounded bg-white/10 text-[10px] font-mono-tech text-slate-300">
-                SOCIAL GRAPH
-              </span>
-            </div>
-            <div className="space-y-2 text-xs font-mono-tech">
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">id</span>
-                <span className="text-cyan-400">UUID (PK)</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">user_id</span>
-                <span className="text-slate-400">UUID FK -&gt; users.id</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">friend_id</span>
-                <span className="text-slate-400">UUID FK -&gt; users.id</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">status</span>
-                <span className="text-emerald-400">'pending' | 'accepted'</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#080B10] border border-white/10 flex justify-between">
-                <span className="text-white">active_session_id</span>
-                <span className="text-[#D4FF00]">TEXT (Live Join Link)</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <View style={styles.sectionGrid}>
+          {[
+            {
+              title: 'TABLE 1 · public.users',
+              tag: 'RLS ENABLED',
+              color: '#D4FF00',
+              cols: [
+                ['id', 'UUID (PK · auth.users)', '#22D3EE'],
+                ['username', 'TEXT UNIQUE NOT NULL', '#34D399'],
+                ['password', 'TEXT (bcrypt hash)', '#FBBF24'],
+                ['spotify_credentials', 'JSONB (OAuth tokens)', '#1DB954'],
+                ['friend_list', 'UUID[] (Array of IDs)', '#C084FC'],
+              ],
+            },
+            {
+              title: 'TABLE 2 · public.playlists',
+              tag: 'SPOTIFY URI SYNC',
+              color: '#1DB954',
+              cols: [
+                ['id', 'UUID (PK)', '#22D3EE'],
+                ['owner_id', 'UUID FK -> users.id', '#94A3B8'],
+                ['spotify_playlist_uri', 'TEXT (spotify:playlist:...)', '#1DB954'],
+                ['target_bpm', 'INT4 (e.g. 170 BPM)', '#D4FF00'],
+                ['tracks', 'JSONB (Track Queue)', '#C084FC'],
+              ],
+            },
+            {
+              title: 'TABLE 3 · public.friends',
+              tag: 'SOCIAL GRAPH',
+              color: '#00F0FF',
+              cols: [
+                ['id', 'UUID (PK)', '#22D3EE'],
+                ['user_id', 'UUID FK -> users.id', '#94A3B8'],
+                ['friend_id', 'UUID FK -> users.id', '#94A3B8'],
+                ['status', "'pending' | 'accepted'", '#34D399'],
+                ['active_session_id', 'TEXT (Live Join Link)', '#D4FF00'],
+              ],
+            },
+          ].map((tbl) => (
+            <View key={tbl.title} style={styles.infoCard}>
+              <View style={styles.tableHeaderRow}>
+                <Text style={[styles.tableTitle, { color: tbl.color }]}>
+                  {tbl.title}
+                </Text>
+                <View style={styles.tableTag}>
+                  <Text style={styles.tableTagText}>{tbl.tag}</Text>
+                </View>
+              </View>
+              <View style={{ gap: 6 }}>
+                {tbl.cols.map(([colName, colType, typeColor]) => (
+                  <View key={colName} style={styles.colRow}>
+                    <Text style={styles.colName}>{colName}</Text>
+                    <Text style={[styles.colType, { color: typeColor }]}>
+                      {colType}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          ))}
+        </View>
       )}
 
       {/* TAB 3: API ARCHITECTURE & INTEGRATION FLOWS */}
       {activeTab === 'apis' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5 space-y-3">
-            <div className="flex items-center gap-2 text-[#1DB954] font-mono-tech text-xs font-bold uppercase">
-              <Music className="w-4 h-4" />
-              1. Custom Broadcast API -&gt; Spotify API Translation
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Instead of relying on a single audio stream (which would consume heavy mobile bandwidth and violate DRM), the host app sends a lightweight <strong>Custom Broadcast Signal</strong> (<code>track_uri</code>, <code>position_ms</code>, <code>server_epoch_ms</code>) via our FastAPI/Supabase broadcast endpoint to all session members. Once the signal reaches each phone, that phone’s client translates the custom payload into an authenticated <code>PUT https://api.spotify.com/v1/me/player/play</code> call with network latency compensation.
-            </p>
-          </div>
+        <View style={styles.sectionGrid}>
+          <View style={styles.infoCard}>
+            <View style={styles.cardHeaderRow}>
+              <Music size={16} color="#1DB954" />
+              <Text style={[styles.apiFlowTitle, { color: '#1DB954' }]}>
+                1. Custom Broadcast API -&gt; Spotify API Translation
+              </Text>
+            </View>
+            <Text style={styles.subBoxBody}>
+              Instead of streaming heavy audio bytes over cellular, the host phone sends a lightweight Custom Broadcast Signal (track_uri, position_ms, server_epoch_ms) via our FastAPI/Supabase broadcast endpoint to all session members. Each peer phone’s Expo app translates that custom payload into an authenticated PUT https://api.spotify.com/v1/me/player/play request with network latency compensation.
+            </Text>
+          </View>
 
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5 space-y-3">
-            <div className="flex items-center gap-2 text-[#FF4D2A] font-mono-tech text-xs font-bold uppercase">
-              <Radio className="w-4 h-4" />
-              2. LiveKit Cloud Call-to-Call Walkie-Talkie API
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Every runner/rider joins a shared <strong>LiveKit Cloud WebRTC Room</strong> using live talk minutes minted by our backend API. Microphones remain muted by default so wind/breathing noise never pollutes the call. Holding the <strong>Push-To-Talk button</strong> enables the local Opus audio track (`setMicrophoneEnabled(true)`), sends a metadata signal that ducks everyone’s Spotify volume to 25%, and streams crystal-clear voice across all phones.
-            </p>
-          </div>
+          <View style={styles.infoCard}>
+            <View style={styles.cardHeaderRow}>
+              <Radio size={16} color="#FF4D2A" />
+              <Text style={[styles.apiFlowTitle, { color: '#FF4D2A' }]}>
+                2. LiveKit Cloud Call-to-Call Walkie-Talkie API
+              </Text>
+            </View>
+            <Text style={styles.subBoxBody}>
+              Every runner/rider joins a shared LiveKit Cloud WebRTC Room using live talk minutes minted by our backend API. Microphones stay muted by default so wind/breathing noise never pollutes the call. Holding the Push-To-Talk paddle enables the local Opus audio track, ducks everyone’s Spotify volume to 25%, and streams crystal-clear voice across all phones.
+            </Text>
+          </View>
 
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5 space-y-3">
-            <div className="flex items-center gap-2 text-[#00F0FF] font-mono-tech text-xs font-bold uppercase">
-              <MapPin className="w-4 h-4" />
-              3. Geolocation + Google Maps Road Conditions API
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              <code>expo-location</code> samples high-accuracy GPS (`BestForNavigation`) every 200ms, projects each athlete’s coordinates onto the route polyline to compute their exact <strong>0–100% linear progress</strong>, and overlays Google Maps Directions/Roads API traffic &amp; surface conditions alongside user-reported hazard pins.
-            </p>
-          </div>
+          <View style={styles.infoCard}>
+            <View style={styles.cardHeaderRow}>
+              <MapPin size={16} color="#00F0FF" />
+              <Text style={[styles.apiFlowTitle, { color: '#00F0FF' }]}>
+                3. Geolocation + Google Maps Road Conditions API
+              </Text>
+            </View>
+            <Text style={styles.subBoxBody}>
+              expo-location samples high-accuracy GPS (BestForNavigation) every 250ms, projects each athlete’s coordinates onto the route polyline to compute their exact 0–100% linear progress, and overlays Google Maps Directions/Roads API surface conditions alongside user-reported hazard pins.
+            </Text>
+          </View>
 
-          <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-5 space-y-3">
-            <div className="flex items-center gap-2 text-[#D4FF00] font-mono-tech text-xs font-bold uppercase">
-              <KeyRound className="w-4 h-4" />
-              4. Live Activities PFP Progress Bar (iOS &amp; In-App)
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
+          <View style={styles.infoCard}>
+            <View style={styles.cardHeaderRow}>
+              <KeyRound size={16} color="#D4FF00" />
+              <Text style={[styles.apiFlowTitle, { color: '#D4FF00' }]}>
+                4. Live Activities PFP Progress Bar (iOS &amp; In-App)
+              </Text>
+            </View>
+            <Text style={styles.subBoxBody}>
               Everyone’s PFP avatar is rendered on a unified 1D route line both at the top of the app cockpit and on the iOS Lock Screen / Dynamic Island via ActivityKit push updates, giving instant eyes-up awareness of pack order, road conditions ahead, expected finish time, and current speed.
-            </p>
-          </div>
-        </div>
+            </Text>
+          </View>
+        </View>
       )}
 
       {/* TAB 4: COPYABLE PRODUCTION CODE SNIPPETS */}
       {activeTab === 'code' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <View style={styles.sectionGrid}>
           {[
             {
               id: 'sql',
@@ -471,38 +470,269 @@ export class PackWalkieTalkieController {
               code: liveKitPttCode,
             },
           ].map((block) => (
-            <div
-              key={block.id}
-              className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-4 flex flex-col justify-between"
-            >
-              <div className="flex items-center justify-between gap-2 mb-2.5">
-                <span className="text-xs font-mono-tech font-bold text-[#D4FF00]">
-                  {block.title}
-                </span>
-                <button
-                  onClick={() => handleCopy(block.id, block.code)}
-                  className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-mono-tech text-white flex items-center gap-1 cursor-pointer"
+            <View key={block.id} style={styles.infoCard}>
+              <View style={styles.codeHeaderRow}>
+                <Text style={styles.codeBlockTitle}>{block.title}</Text>
+                <Pressable
+                  onPress={() => handleCopy(block.id, block.code)}
+                  style={styles.copyBtn}
                 >
                   {copiedId === block.id ? (
                     <>
-                      <Check className="w-3 h-3 text-emerald-400" />
-                      <span>Copied</span>
+                      <Check size={12} color="#34D399" />
+                      <Text style={[styles.copyBtnText, { color: '#34D399' }]}>
+                        Copied
+                      </Text>
                     </>
                   ) : (
                     <>
-                      <Copy className="w-3 h-3" />
-                      <span>Copy</span>
+                      <Copy size={12} color="#FFFFFF" />
+                      <Text style={styles.copyBtnText}>Copy</Text>
                     </>
                   )}
-                </button>
-              </div>
-              <pre className="bg-[#080B10] border border-white/10 rounded-xl p-3 text-[10.5px] font-mono-tech text-slate-300 overflow-x-auto leading-relaxed max-h-80">
-                <code>{block.code}</code>
-              </pre>
-            </div>
+                </Pressable>
+              </View>
+
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator
+                style={styles.codeBox}
+              >
+                <Text style={styles.codeText}>{block.code}</Text>
+              </ScrollView>
+            </View>
           ))}
-        </div>
+        </View>
       )}
-    </div>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    gap: 14,
+  },
+  bannerCard: {
+    backgroundColor: '#0E131D',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: 14,
+    gap: 12,
+  },
+  bannerTitleBlock: {
+    gap: 4,
+  },
+  bannerBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  specBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: 'rgba(212, 255, 0, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(212, 255, 0, 0.35)',
+  },
+  specBadgeText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+    color: '#D4FF00',
+  },
+  stackSubtitle: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  bannerTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  envStrip: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  envPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#080B10',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  envPillText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#CBD5E1',
+  },
+  tabsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    backgroundColor: '#080B10',
+    padding: 5,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  tabBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  tabBtnActive: {
+    backgroundColor: '#D4FF00',
+  },
+  tabBtnText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#94A3B8',
+    textTransform: 'uppercase',
+  },
+  tabBtnTextActive: {
+    color: '#080B10',
+  },
+  sectionGrid: {
+    gap: 12,
+  },
+  infoCard: {
+    backgroundColor: '#0E131D',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: 14,
+    gap: 10,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cardTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  subBox: {
+    backgroundColor: '#080B10',
+    borderRadius: 12,
+    padding: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    gap: 4,
+  },
+  subBoxHeading: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+  },
+  subBoxBody: {
+    fontSize: 12,
+    color: '#CBD5E1',
+    lineHeight: 18,
+  },
+  tableHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  tableTitle: {
+    fontSize: 12,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+  },
+  tableTag: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  tableTagText: {
+    fontSize: 9,
+    fontFamily: MONO_FONT,
+    color: '#CBD5E1',
+  },
+  colRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#080B10',
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  colName: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  colType: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+  },
+  apiFlowTitle: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    flex: 1,
+  },
+  codeHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  codeBlockTitle: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#D4FF00',
+    flex: 1,
+  },
+  copyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  copyBtnText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  codeBox: {
+    backgroundColor: '#080B10',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    maxHeight: 260,
+  },
+  codeText: {
+    fontSize: 10.5,
+    fontFamily: MONO_FONT,
+    color: '#CBD5E1',
+    lineHeight: 16,
+  },
+});

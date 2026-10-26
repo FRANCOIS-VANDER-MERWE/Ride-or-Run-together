@@ -1,5 +1,14 @@
 import React, { useState } from 'react';
 import {
+  View,
+  Text,
+  Pressable,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Platform,
+} from 'react-native';
+import {
   Music2,
   Play,
   Pause,
@@ -12,7 +21,7 @@ import {
   ArrowRight,
   Activity,
   Cpu,
-} from 'lucide-react';
+} from './Icons';
 import {
   Athlete,
   BroadcastSignalEvent,
@@ -34,6 +43,12 @@ interface SpotifySyncDeckProps {
   onForceResyncBroadcast: () => void;
   onSelectTrackIndex: (index: number) => void;
 }
+
+const MONO_FONT = Platform.select({
+  ios: 'Menlo',
+  android: 'monospace',
+  default: 'monospace',
+});
 
 function formatTrackTime(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
@@ -58,6 +73,8 @@ export default function SpotifySyncDeck({
   onSelectTrackIndex,
 }: SpotifySyncDeckProps) {
   const [showApiTranslator, setShowApiTranslator] = useState(true);
+  const [barWidth, setBarWidth] = useState(260);
+
   const currentTrack = tracks[currentTrackIndex] || tracks[0];
   const latestSignal = broadcastLogs[0];
 
@@ -67,264 +84,734 @@ export default function SpotifySyncDeck({
   );
 
   return (
-    <section className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-4 sm:p-5 shadow-2xl flex flex-col justify-between">
+    <View style={styles.card}>
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-3.5">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-[#1DB954]/15 border border-[#1DB954]/40 text-[#1DB954] flex items-center justify-center">
-            <Music2 className="w-4 h-4" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-mono-tech uppercase tracking-widest text-[#1DB954] font-bold">
-                SPOTIFY PACK SYNC · CUSTOM BROADCAST API
-              </span>
-              <span className="px-1.5 py-0.5 rounded bg-[#1DB954]/15 border border-[#1DB954]/30 text-[10px] font-mono-tech text-[#1DB954]">
-                {currentTrack.bpm} BPM LOCKED
-              </span>
-            </div>
-            <h3 className="font-display font-bold text-sm sm:text-base text-white">
+      <View style={styles.headerRow}>
+        <View style={styles.brandRow}>
+          <View style={styles.musicIconBox}>
+            <Music2 size={16} color="#1DB954" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={styles.badgeRow}>
+              <Text style={styles.spotifyLabel}>
+                SPOTIFY PACK SYNC · BROADCAST API
+              </Text>
+              <View style={styles.bpmBadge}>
+                <Text style={styles.bpmBadgeText}>
+                  {currentTrack.bpm} BPM LOCKED
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.deckTitle}>
               Synchronized Cadence Music Stream
-            </h3>
-          </div>
-        </div>
+            </Text>
+          </View>
+        </View>
 
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={onForceResyncBroadcast}
-            className="px-2.5 py-1.5 rounded-xl bg-[#1DB954]/20 hover:bg-[#1DB954]/30 border border-[#1DB954]/50 text-[11px] font-mono-tech font-bold text-[#1DB954] flex items-center gap-1.5 transition-all cursor-pointer"
-            title="Emit custom broadcast signal to re-align all peers within 5ms"
+        <View style={styles.headerActions}>
+          <Pressable
+            onPress={onForceResyncBroadcast}
+            style={styles.resyncBtn}
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Broadcast Sync</span>
-          </button>
+            <RefreshCw size={13} color="#1DB954" />
+            <Text style={styles.resyncBtnText}>Broadcast Sync</Text>
+          </Pressable>
 
-          <button
-            onClick={() => setShowApiTranslator((v) => !v)}
-            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-mono-tech flex items-center gap-1.5 transition-all cursor-pointer ${
-              showApiTranslator
-                ? 'bg-[#D4FF00]/15 border-[#D4FF00]/50 text-[#D4FF00]'
-                : 'bg-white/5 border-white/10 text-slate-400'
-            }`}
+          <Pressable
+            onPress={() => setShowApiTranslator((v) => !v)}
+            style={[
+              styles.translatorToggleBtn,
+              showApiTranslator && styles.translatorToggleBtnActive,
+            ]}
           >
-            <Code2 className="w-3.5 h-3.5" />
-            <span>API Translator</span>
-          </button>
-        </div>
-      </div>
+            <Code2
+              size={13}
+              color={showApiTranslator ? '#D4FF00' : '#94A3B8'}
+            />
+            <Text
+              style={[
+                styles.translatorToggleText,
+                showApiTranslator && { color: '#D4FF00' },
+              ]}
+            >
+              API Translator
+            </Text>
+          </Pressable>
+        </View>
+      </View>
 
       {/* Now Playing Card + Controls */}
-      <div className="bg-[#080B10]/90 rounded-xl p-3.5 border border-white/10 mb-3.5">
-        <div className="flex items-center gap-3.5">
-          <div className="relative shrink-0">
-            <img
-              src={currentTrack.coverUrl}
-              alt={currentTrack.title}
-              className="w-16 h-16 rounded-xl object-cover border border-white/15 shadow-lg"
+      <View style={styles.nowPlayingBox}>
+        <View style={styles.trackMainRow}>
+          <View style={styles.coverWrap}>
+            <Image
+              source={{ uri: currentTrack.coverUrl }}
+              style={styles.coverImg}
             />
-            <span className="absolute -bottom-1 -right-1 px-1.5 py-0.5 rounded bg-[#1DB954] text-[#080B10] font-mono-tech font-bold text-[9px]">
-              {currentTrack.bpm} BPM
-            </span>
-          </div>
+            <View style={styles.coverBpmTag}>
+              <Text style={styles.coverBpmTagText}>
+                {currentTrack.bpm} BPM
+              </Text>
+            </View>
+          </View>
 
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2">
-              <h4 className="font-display font-bold text-sm text-white truncate">
+          <View style={{ flex: 1, gap: 4 }}>
+            <View style={styles.trackTitleRow}>
+              <Text style={styles.trackTitle} numberOfLines={1}>
                 {currentTrack.title}
-              </h4>
-              <span
-                className={`px-2 py-0.5 rounded text-[10px] font-mono-tech font-bold flex items-center gap-1 shrink-0 ${
-                  isVoiceDucked
-                    ? 'bg-[#FF4D2A]/20 text-[#FF4D2A] border border-[#FF4D2A]/40'
-                    : 'bg-white/10 text-slate-300'
-                }`}
+              </Text>
+              <View
+                style={[
+                  styles.volTag,
+                  isVoiceDucked && styles.volTagDucked,
+                ]}
               >
-                <Volume2 className="w-3 h-3" />
-                {isVoiceDucked ? 'DUCKED 25% (PTT)' : 'VOL 100%'}
-              </span>
-            </div>
-            <p className="text-xs text-slate-400 truncate mt-0.5">
-              {currentTrack.artist} · <span className="text-slate-500">{currentTrack.album}</span>
-            </p>
-
-            {/* Interactive Scrubber Bar (Seeking emits a custom broadcast signal!) */}
-            <div className="mt-2.5">
-              <div
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const clickRatio = Math.max(
-                    0,
-                    Math.min(1, (e.clientX - rect.left) / rect.width)
-                  );
-                  onSeekTrack(Math.round(clickRatio * currentTrack.durationSec));
-                }}
-                className="relative h-2 w-full rounded-full bg-slate-800 cursor-pointer overflow-hidden group"
-                title="Click to seek & broadcast new timestamp to all 5 phones"
-              >
-                <div
-                  style={{ width: `${pctPlayed}%` }}
-                  className="h-full rounded-full bg-gradient-to-r from-[#1DB954] to-[#D4FF00] transition-all duration-200"
+                <Volume2
+                  size={11}
+                  color={isVoiceDucked ? '#FF4D2A' : '#CBD5E1'}
                 />
-              </div>
-              <div className="flex items-center justify-between text-[10px] font-mono-tech text-slate-400 mt-1">
-                <span>{formatTrackTime(progressSec)}</span>
-                <span className="text-[#1DB954]">
-                  URI: {currentTrack.uri.slice(0, 26)}...
-                </span>
-                <span>{formatTrackTime(currentTrack.durationSec)}</span>
-              </div>
-            </div>
-          </div>
-        </div>
+                <Text
+                  style={[
+                    styles.volTagText,
+                    isVoiceDucked && { color: '#FF4D2A' },
+                  ]}
+                >
+                  {isVoiceDucked ? 'DUCKED 25%' : 'VOL 100%'}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.trackArtist} numberOfLines={1}>
+              {currentTrack.artist} ·{' '}
+              <Text style={{ color: '#64748B' }}>{currentTrack.album}</Text>
+            </Text>
+
+            {/* Interactive Scrubber Bar */}
+            <Pressable
+              onLayout={(e) => {
+                const w = e.nativeEvent.layout.width;
+                if (w > 0) setBarWidth(w);
+              }}
+              onPress={(e) => {
+                const x = e.nativeEvent.locationX;
+                if (typeof x === 'number' && barWidth > 0) {
+                  const ratio = Math.max(0, Math.min(1, x / barWidth));
+                  onSeekTrack(Math.round(ratio * currentTrack.durationSec));
+                }
+              }}
+              style={styles.scrubberOuter}
+            >
+              <View
+                style={[
+                  styles.scrubberFill,
+                  { width: `${pctPlayed}%` },
+                ]}
+              />
+            </Pressable>
+
+            <View style={styles.scrubberMetaRow}>
+              <Text style={styles.scrubberTime}>
+                {formatTrackTime(progressSec)}
+              </Text>
+              <Text style={styles.scrubberUri} numberOfLines={1}>
+                {currentTrack.uri}
+              </Text>
+              <Text style={styles.scrubberTime}>
+                {formatTrackTime(currentTrack.durationSec)}
+              </Text>
+            </View>
+          </View>
+        </View>
 
         {/* Playback Controls + Track Queue Selector */}
-        <div className="mt-3 pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onPrevTrack}
-              className="p-2 rounded-xl bg-white/5 hover:bg-white/15 border border-white/10 text-white transition-all cursor-pointer"
-              title="Previous Track (Broadcasts to Pack)"
-            >
-              <SkipBack className="w-4 h-4" />
-            </button>
-            <button
-              onClick={onTogglePlay}
-              className="px-4 py-2 rounded-xl bg-[#1DB954] hover:bg-[#22d45f] text-[#080B10] font-mono-tech font-bold text-xs uppercase flex items-center gap-1.5 shadow-[0_0_15px_rgba(29,185,84,0.4)] transition-all cursor-pointer"
-            >
+        <View style={styles.controlsBar}>
+          <View style={styles.transportRow}>
+            <Pressable onPress={onPrevTrack} style={styles.skipBtn}>
+              <SkipBack size={15} color="#FFFFFF" />
+            </Pressable>
+
+            <Pressable onPress={onTogglePlay} style={styles.playPauseBtn}>
               {isPlaying ? (
                 <>
-                  <Pause className="w-4 h-4 fill-current" />
-                  <span>Pause Pack</span>
+                  <Pause size={15} color="#080B10" />
+                  <Text style={styles.playPauseText}>Pause Pack</Text>
                 </>
               ) : (
                 <>
-                  <Play className="w-4 h-4 fill-current" />
-                  <span>Sync Play</span>
+                  <Play size={15} color="#080B10" />
+                  <Text style={styles.playPauseText}>Sync Play</Text>
                 </>
               )}
-            </button>
-            <button
-              onClick={onNextTrack}
-              className="p-2 rounded-xl bg-white/5 hover:bg-white/15 border border-white/10 text-white transition-all cursor-pointer"
-              title="Next Track (Broadcasts to Pack)"
-            >
-              <SkipForward className="w-4 h-4" />
-            </button>
-          </div>
+            </Pressable>
 
-          {/* Quick Track Pills */}
-          <div className="flex items-center gap-1">
-            {tracks.map((t, idx) => (
-              <button
-                key={t.id}
-                onClick={() => onSelectTrackIndex(idx)}
-                className={`px-2 py-1 rounded-lg text-[10px] font-mono-tech border transition-all cursor-pointer ${
-                  idx === currentTrackIndex
-                    ? 'bg-[#1DB954]/20 border-[#1DB954] text-[#1DB954] font-bold'
-                    : 'bg-black/40 border-white/10 text-slate-400 hover:text-white'
-                }`}
-              >
-                {t.bpm} BPM
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+            <Pressable onPress={onNextTrack} style={styles.skipBtn}>
+              <SkipForward size={15} color="#FFFFFF" />
+            </Pressable>
+
+            <Pressable
+              onPress={() =>
+                onSeekTrack(
+                  Math.min(currentTrack.durationSec - 5, progressSec + 30)
+                )
+              }
+              style={styles.seekJumpBtn}
+            >
+              <Text style={styles.seekJumpText}>+30s Seek</Text>
+            </Pressable>
+          </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.bpmPillsRow}
+          >
+            {tracks.map((t, idx) => {
+              const active = idx === currentTrackIndex;
+              return (
+                <Pressable
+                  key={t.id}
+                  onPress={() => onSelectTrackIndex(idx)}
+                  style={[
+                    styles.bpmTrackPill,
+                    active && styles.bpmTrackPillActive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.bpmTrackPillText,
+                      active && styles.bpmTrackPillTextActive,
+                    ]}
+                  >
+                    {t.bpm} BPM · {t.title.split(' ')[0]}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
 
       {/* Per-User Drift Status Row */}
-      <div className="flex items-center justify-between gap-1.5 mb-3 overflow-x-auto pb-1">
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.driftScroll}
+      >
         {athletes.map((ath) => (
-          <div
-            key={ath.id}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#080B10]/70 border border-white/10 shrink-0"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-[#1DB954]" />
-            <span className="text-[10px] font-medium text-slate-300">
+          <View key={ath.id} style={styles.driftChip}>
+            <View style={styles.driftDot} />
+            <Text style={styles.driftName}>
               {ath.isSelf ? 'You' : ath.name.split(' ')[0]}
-            </span>
-            <span className="text-[10px] font-mono-tech text-[#1DB954]">
+            </Text>
+            <Text style={styles.driftMs}>
               {ath.isSelf ? 'HOST' : `+${ath.spotifyDriftMs}ms`}
-            </span>
-          </div>
+            </Text>
+          </View>
         ))}
-      </div>
+      </ScrollView>
 
       {/* CUSTOM API BROADCAST -> CLIENT SPOTIFY API TRANSLATOR INSPECTOR */}
       {showApiTranslator && latestSignal && (
-        <div className="bg-[#080B10] rounded-xl p-3 border border-[#D4FF00]/30 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-mono-tech uppercase tracking-wider text-[#D4FF00] font-bold flex items-center gap-1.5">
-              <Cpu className="w-3.5 h-3.5" />
-              Custom Broadcast Signal -&gt; Client Spotify API Translation
-            </span>
-            <span className="text-[10px] font-mono-tech text-emerald-400 flex items-center gap-1">
-              <CheckCircle2 className="w-3 h-3" />
-              {latestSignal.peersTranslated}/5 Peers Translated ({latestSignal.avgDriftMs}ms drift)
-            </span>
-          </div>
+        <View style={styles.translatorBox}>
+          <View style={styles.translatorHeader}>
+            <View style={styles.translatorTitleWrap}>
+              <Cpu size={13} color="#D4FF00" />
+              <Text style={styles.translatorTitle}>
+                Custom Broadcast -&gt; Client Spotify API Translator
+              </Text>
+            </View>
+            <View style={styles.peersBadge}>
+              <CheckCircle2 size={12} color="#34D399" />
+              <Text style={styles.peersBadgeText}>
+                {latestSignal.peersTranslated}/5 Peers ({latestSignal.avgDriftMs}
+                ms)
+              </Text>
+            </View>
+          </View>
 
           {/* 3-Step Visual Pipeline */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px] font-mono-tech">
-            <div className="p-2 rounded-lg bg-[#111726] border border-white/10">
-              <div className="text-[#D4FF00] font-bold mb-0.5">
+          <View style={styles.pipelineGrid}>
+            <View style={styles.pipelineCard}>
+              <Text style={[styles.pipelineStepTitle, { color: '#D4FF00' }]}>
                 1. CUSTOM APP BROADCAST
-              </div>
-              <div className="text-slate-300 truncate">
+              </Text>
+              <Text style={styles.pipelineEndpoint} numberOfLines={1}>
                 {latestSignal.customEndpoint}
-              </div>
-              <div className="text-slate-400 mt-1">
-                action: <span className="text-white">{latestSignal.action}</span>
-              </div>
-              <div className="text-slate-400">
+              </Text>
+              <Text style={styles.pipelineMeta}>
+                action:{' '}
+                <Text style={{ color: '#FFFFFF' }}>{latestSignal.action}</Text>
+              </Text>
+              <Text style={styles.pipelineMeta}>
                 pos_ms:{' '}
-                <span className="text-white">
+                <Text style={{ color: '#FFFFFF' }}>
                   {latestSignal.customPayload.position_ms}
-                </span>
-              </div>
-            </div>
+                </Text>
+              </Text>
+            </View>
 
-            <div className="p-2 rounded-lg bg-[#111726] border border-white/10 flex flex-col justify-between">
-              <div className="text-[#00F0FF] font-bold flex items-center justify-between">
-                <span>2. SUPABASE REALTIME</span>
-                <ArrowRight className="w-3 h-3" />
-              </div>
-              <div className="text-slate-300">
-                Channel: <span className="text-white">session:sf-884</span>
-              </div>
-              <div className="text-slate-400">
-                Each phone receives broadcast &amp; adds RTT offset (+12ms)
-              </div>
-            </div>
+            <View style={styles.pipelineCard}>
+              <View style={styles.pipelineStepRow}>
+                <Text style={[styles.pipelineStepTitle, { color: '#00F0FF' }]}>
+                  2. SUPABASE REALTIME
+                </Text>
+                <ArrowRight size={12} color="#00F0FF" />
+              </View>
+              <Text style={styles.pipelineEndpoint}>
+                Channel: <Text style={{ color: '#FFFFFF' }}>session:sf-884</Text>
+              </Text>
+              <Text style={styles.pipelineMeta}>
+                Each phone receives broadcast &amp; adds RTT offset (+
+                {latestSignal.clientSpotifyBody.device_compensation_ms}ms)
+              </Text>
+            </View>
 
-            <div className="p-2 rounded-lg bg-[#111726] border border-[#1DB954]/40">
-              <div className="text-[#1DB954] font-bold mb-0.5">
+            <View
+              style={[
+                styles.pipelineCard,
+                { borderColor: 'rgba(29, 185, 84, 0.45)' },
+              ]}
+            >
+              <Text style={[styles.pipelineStepTitle, { color: '#1DB954' }]}>
                 3. PEER SPOTIFY API CALL
-              </div>
-              <div className="text-slate-300 truncate">
+              </Text>
+              <Text style={styles.pipelineEndpoint} numberOfLines={1}>
                 {latestSignal.clientSpotifyEndpoint}
-              </div>
-              <div className="text-slate-400 mt-1 truncate">
-                uri: <span className="text-white">{latestSignal.clientSpotifyBody.uris[0]}</span>
-              </div>
-              <div className="text-slate-400">
+              </Text>
+              <Text style={styles.pipelineMeta} numberOfLines={1}>
+                uri:{' '}
+                <Text style={{ color: '#FFFFFF' }}>
+                  {latestSignal.clientSpotifyBody.uris[0]}
+                </Text>
+              </Text>
+              <Text style={styles.pipelineMeta}>
                 seek_ms:{' '}
-                <span className="text-[#1DB954] font-bold">
+                <Text style={{ color: '#1DB954', fontWeight: '700' }}>
                   {latestSignal.clientSpotifyBody.position_ms}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
+                </Text>
+              </Text>
+            </View>
+          </View>
+        </View>
       )}
 
       {/* Footer status */}
-      <div className="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between text-[11px] font-mono-tech text-slate-400">
-        <span className="flex items-center gap-1.5">
-          <Activity className="w-3.5 h-3.5 text-[#1DB954]" />
-          Spotify OAuth Tokens via Supabase `users` table
-        </span>
-        <span>Last signal: {latestSignal?.timestamp}</span>
-      </div>
-    </section>
+      <View style={styles.footerRow}>
+        <View style={styles.footerItem}>
+          <Activity size={13} color="#1DB954" />
+          <Text style={styles.footerText}>
+            Spotify OAuth Tokens via Supabase `users` table
+          </Text>
+        </View>
+        <Text style={styles.footerText}>
+          Last: {latestSignal?.timestamp}
+        </Text>
+      </View>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  card: {
+    backgroundColor: '#0E131D',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: 14,
+    gap: 12,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  musicIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: 'rgba(29, 185, 84, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(29, 185, 84, 0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  spotifyLabel: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+    color: '#1DB954',
+    letterSpacing: 0.5,
+  },
+  bpmBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: 'rgba(29, 185, 84, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(29, 185, 84, 0.35)',
+  },
+  bpmBadgeText: {
+    fontSize: 9,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#1DB954',
+  },
+  deckTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginTop: 2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  resyncBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: 'rgba(29, 185, 84, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(29, 185, 84, 0.5)',
+  },
+  resyncBtnText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#1DB954',
+  },
+  translatorToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  translatorToggleBtnActive: {
+    backgroundColor: 'rgba(212, 255, 0, 0.15)',
+    borderColor: 'rgba(212, 255, 0, 0.5)',
+  },
+  translatorToggleText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#94A3B8',
+  },
+  nowPlayingBox: {
+    backgroundColor: '#080B10',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    gap: 12,
+  },
+  trackMainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  coverWrap: {
+    position: 'relative',
+  },
+  coverImg: {
+    width: 62,
+    height: 62,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  coverBpmTag: {
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: '#1DB954',
+  },
+  coverBpmTagText: {
+    fontSize: 8,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+    color: '#080B10',
+  },
+  trackTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  trackTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  volTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  volTagDucked: {
+    backgroundColor: 'rgba(255, 77, 42, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 77, 42, 0.45)',
+  },
+  volTagText: {
+    fontSize: 9,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#CBD5E1',
+  },
+  trackArtist: {
+    fontSize: 11,
+    color: '#94A3B8',
+  },
+  scrubberOuter: {
+    height: 8,
+    width: '100%',
+    borderRadius: 999,
+    backgroundColor: '#1E293B',
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  scrubberFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#1DB954',
+  },
+  scrubberMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  scrubberTime: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  scrubberUri: {
+    fontSize: 9,
+    fontFamily: MONO_FONT,
+    color: '#1DB954',
+    flex: 1,
+    textAlign: 'center',
+  },
+  controlsBar: {
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    gap: 10,
+  },
+  transportRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  skipBtn: {
+    padding: 9,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  playPauseBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 11,
+    backgroundColor: '#1DB954',
+  },
+  playPauseText: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+    color: '#080B10',
+    textTransform: 'uppercase',
+  },
+  seekJumpBtn: {
+    marginLeft: 'auto',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 9,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  seekJumpText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#CBD5E1',
+  },
+  bpmPillsRow: {
+    gap: 6,
+  },
+  bpmTrackPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  bpmTrackPillActive: {
+    backgroundColor: 'rgba(29, 185, 84, 0.2)',
+    borderColor: '#1DB954',
+  },
+  bpmTrackPillText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  bpmTrackPillTextActive: {
+    color: '#1DB954',
+    fontWeight: '700',
+  },
+  driftScroll: {
+    gap: 6,
+  },
+  driftChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#080B10',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  driftDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#1DB954',
+  },
+  driftName: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#CBD5E1',
+  },
+  driftMs: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#1DB954',
+  },
+  translatorBox: {
+    backgroundColor: '#080B10',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 255, 0, 0.32)',
+    gap: 10,
+  },
+  translatorHeader: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  translatorTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  translatorTitle: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#D4FF00',
+    textTransform: 'uppercase',
+  },
+  peersBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  peersBadgeText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#34D399',
+  },
+  pipelineGrid: {
+    gap: 8,
+  },
+  pipelineCard: {
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: '#111726',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    gap: 3,
+  },
+  pipelineStepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  pipelineStepTitle: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+  },
+  pipelineEndpoint: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#CBD5E1',
+  },
+  pipelineMeta: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  footerRow: {
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  footerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  footerText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+});

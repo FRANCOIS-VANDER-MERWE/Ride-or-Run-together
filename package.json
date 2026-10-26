@@ -1,28 +1,36 @@
 {
-  "name": "figma-make-app",
-  "private": true,
+  "name": "pacelock-expo",
   "version": "1.0.0",
-  "type": "module",
+  "private": true,
+  "main": "index.ts",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "format": "oxfmt"
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "lucide-react": "^1.59.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "@expo/metro-runtime": "~58.0.15",
+    "@supabase/supabase-js": "^2.48.1",
+    "expo": "~58.0.19",
+    "expo-asset": "~58.0.18",
+    "expo-clipboard": "~58.0.4",
+    "expo-font": "~58.0.10",
+    "expo-haptics": "~58.0.7",
+    "expo-location": "~58.0.19",
+    "expo-sqlite": "~58.0.14",
+    "expo-status-bar": "~58.0.4",
+    "expo-symbols": "~58.0.4",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.0",
+    "react-native-safe-area-context": "~5.10.1",
+    "react-native-svg": "15.16.0",
+    "react-native-web": "~0.21.4"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.0.0",
-    "@types/node": "^22.0.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^6.0.0",
-    "oxfmt": "^0.2.0",
-    "tailwindcss": "^4.0.0",
-    "typescript": "^5.7.0",
-    "vite": "^8.0.5"
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
   }
 }

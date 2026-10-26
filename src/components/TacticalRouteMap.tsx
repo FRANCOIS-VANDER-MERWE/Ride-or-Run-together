@@ -1,6 +1,27 @@
 import React, { useState } from 'react';
 import {
-  MapPin,
+  View,
+  Text,
+  Pressable,
+  Image,
+  StyleSheet,
+  Platform,
+} from 'react-native';
+import Svg, {
+  Defs,
+  RadialGradient,
+  Stop,
+  Rect,
+  Path,
+  Ellipse,
+  G,
+  Line,
+  Polygon,
+  Polyline,
+  Circle,
+  Text as SvgText,
+} from 'react-native-svg';
+import {
   Wind,
   Thermometer,
   Compass,
@@ -8,11 +29,10 @@ import {
   PlusCircle,
   AlertTriangle,
   CheckCircle2,
-  Navigation2,
   Mountain,
   ShieldAlert,
   Eye,
-} from 'lucide-react';
+} from './Icons';
 import {
   Athlete,
   RoadConditionType,
@@ -28,8 +48,18 @@ interface TacticalRouteMapProps {
   onSelectAthlete: (id: string) => void;
   activeSpeakerId: string | null;
   hazardPins: RoadHazardPin[];
-  onAddHazardPin: (type: RoadConditionType, title: string, description: string) => void;
+  onAddHazardPin: (
+    type: RoadConditionType,
+    title: string,
+    description: string
+  ) => void;
 }
+
+const MONO_FONT = Platform.select({
+  ios: 'Menlo',
+  android: 'monospace',
+  default: 'monospace',
+});
 
 // Deterministic piecewise route polyline (viewBox 0 0 800 420)
 const ROUTE_WAYPOINTS: { pct: number; x: number; y: number }[] = [
@@ -45,7 +75,11 @@ const ROUTE_WAYPOINTS: { pct: number; x: number; y: number }[] = [
   { pct: 100, x: 748, y: 74 },
 ];
 
-function getPointAtProgress(pct: number): { x: number; y: number; angleDeg: number } {
+function getPointAtProgress(pct: number): {
+  x: number;
+  y: number;
+  angleDeg: number;
+} {
   const clamped = Math.max(0, Math.min(100, pct));
   for (let i = 0; i < ROUTE_WAYPOINTS.length - 1; i++) {
     const p0 = ROUTE_WAYPOINTS[i];
@@ -98,7 +132,9 @@ export default function TacticalRouteMap({
   const leaderPoint = getPointAtProgress(leaderAthlete.progress);
 
   const activeHazard =
-    hazardPins.find((h) => h.id === activeHazardId) || hazardPins[1] || hazardPins[0];
+    hazardPins.find((h) => h.id === activeHazardId) ||
+    hazardPins[1] ||
+    hazardPins[0];
 
   const quickHazardPresets: {
     type: RoadConditionType;
@@ -108,17 +144,20 @@ export default function TacticalRouteMap({
     {
       type: 'caution',
       title: 'Wet Surface / Standing Water',
-      description: 'Slick asphalt patch reported by pack — reduce cornering lean.',
+      description:
+        'Slick asphalt patch reported by pack — reduce cornering lean.',
     },
     {
       type: 'hazard',
       title: 'Pothole / Lane Obstruction',
-      description: 'Single-file right shoulder obstruction ahead — call out to pack.',
+      description:
+        'Single-file right shoulder obstruction ahead — call out to pack.',
     },
     {
       type: 'caution',
       title: '18mph Crosswind Gust Zone',
-      description: 'Strong coastal crosswind gusting across exposed causeway.',
+      description:
+        'Strong coastal crosswind gusting across exposed causeway.',
     },
     {
       type: 'optimal',
@@ -127,216 +166,268 @@ export default function TacticalRouteMap({
     },
   ];
 
+  const activeHazardStyle = CONDITION_COLORS[activeHazard.type];
+
   return (
-    <div className="relative bg-[#0B0F18] border border-white/10 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between min-h-[430px]">
-      {/* TOP FLOATING HUD BAR: GOOGLE MAPS ROAD CONDITIONS & WEATHER TELEMETRY */}
-      <div className="relative z-20 p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-2 bg-gradient-to-b from-[#080B10]/95 via-[#080B10]/70 to-transparent">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#111726]/90 border border-white/15 backdrop-blur-md">
-            <Compass className="w-4 h-4 text-[#D4FF00]" />
-            <span className="text-xs font-mono-tech font-semibold text-white">
+    <View style={styles.container}>
+      {/* TOP HUD BAR: GOOGLE MAPS ROAD CONDITIONS & WEATHER TELEMETRY */}
+      <View style={styles.topHud}>
+        <View style={styles.hudRow}>
+          <View style={styles.locationPill}>
+            <Compass size={14} color="#D4FF00" />
+            <Text style={styles.locationText} numberOfLines={1}>
               {route.locationLabel}
-            </span>
-          </div>
+            </Text>
+          </View>
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#111726]/90 border border-white/15 backdrop-blur-md text-xs font-mono-tech text-slate-300">
-            <Thermometer className="w-3.5 h-3.5 text-cyan-400" />
-            <span>{route.weatherTempF}°F</span>
-            <span className="text-slate-600">|</span>
-            <Wind className="w-3.5 h-3.5 text-amber-400" />
-            <span>
+          <View style={styles.weatherPill}>
+            <Thermometer size={13} color="#22D3EE" />
+            <Text style={styles.weatherText}>{route.weatherTempF}°F</Text>
+            <Text style={styles.weatherDivider}>|</Text>
+            <Wind size={13} color="#FBBF24" />
+            <Text style={styles.weatherText}>
               {route.headwindMph} mph {route.headwindDir}
-            </span>
-            <span className="text-slate-600 hidden sm:inline">|</span>
-            <Mountain className="w-3.5 h-3.5 text-emerald-400 hidden sm:inline" />
-            <span className="hidden sm:inline">+{route.elevationGainFt} ft</span>
-          </div>
-        </div>
+            </Text>
+            <Text style={styles.weatherDivider}>|</Text>
+            <Mountain size={13} color="#34D399" />
+            <Text style={styles.weatherText}>+{route.elevationGainFt} ft</Text>
+          </View>
+        </View>
 
-        {/* Layer Toggle Pills + Report Road Hazard Button */}
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setShowRoadConditions((v) => !v)}
-            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-mono-tech uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-              showRoadConditions
-                ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300'
-                : 'bg-[#111726]/80 border-white/10 text-slate-400'
-            }`}
+        {/* Layer Toggles + Report Road Hazard Button */}
+        <View style={styles.layerControlsRow}>
+          <Pressable
+            onPress={() => setShowRoadConditions((v) => !v)}
+            style={[
+              styles.layerBtn,
+              showRoadConditions && styles.layerBtnEmerald,
+            ]}
           >
-            <Layers className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Road Conditions</span>
-          </button>
+            <Layers
+              size={13}
+              color={showRoadConditions ? '#6EE7B7' : '#94A3B8'}
+            />
+            <Text
+              style={[
+                styles.layerBtnText,
+                showRoadConditions && { color: '#6EE7B7' },
+              ]}
+            >
+              Road Conditions
+            </Text>
+          </Pressable>
 
-          <button
-            onClick={() => setShowPackTethers((v) => !v)}
-            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-mono-tech uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-              showPackTethers
-                ? 'bg-[#00F0FF]/15 border-[#00F0FF]/50 text-[#00F0FF]'
-                : 'bg-[#111726]/80 border-white/10 text-slate-400'
-            }`}
+          <Pressable
+            onPress={() => setShowPackTethers((v) => !v)}
+            style={[styles.layerBtn, showPackTethers && styles.layerBtnCyan]}
           >
-            <Eye className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Draft Tethers</span>
-          </button>
+            <Eye size={13} color={showPackTethers ? '#00F0FF' : '#94A3B8'} />
+            <Text
+              style={[
+                styles.layerBtnText,
+                showPackTethers && { color: '#00F0FF' },
+              ]}
+            >
+              Draft Tethers
+            </Text>
+          </Pressable>
 
-          <button
-            onClick={() => setShowReportDrawer((v) => !v)}
-            className="px-3 py-1.5 rounded-xl bg-[#D4FF00] text-[#080B10] font-mono-tech font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5 hover:bg-[#e1ff38] transition-all shadow-[0_0_15px_rgba(212,255,0,0.3)] cursor-pointer"
+          <Pressable
+            onPress={() => setShowWindOverlay((v) => !v)}
+            style={[styles.layerBtn, showWindOverlay && styles.layerBtnSky]}
           >
-            <PlusCircle className="w-3.5 h-3.5" />
-            <span>Pin Condition</span>
-          </button>
-        </div>
-      </div>
+            <Wind size={13} color={showWindOverlay ? '#38BDF8' : '#94A3B8'} />
+            <Text
+              style={[
+                styles.layerBtnText,
+                showWindOverlay && { color: '#38BDF8' },
+              ]}
+            >
+              Wind
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => setShowReportDrawer((v) => !v)}
+            style={styles.pinActionBtn}
+          >
+            <PlusCircle size={13} color="#080B10" />
+            <Text style={styles.pinActionBtnText}>Pin Condition</Text>
+          </Pressable>
+        </View>
+      </View>
 
       {/* OPTIONAL DRAWER TO DROP A LIVE GOOGLE MAPS / PACK ROAD CONDITION PIN */}
       {showReportDrawer && (
-        <div className="relative z-30 mx-4 mb-2 p-3.5 rounded-xl bg-[#111726]/95 border border-[#D4FF00]/40 backdrop-blur-xl shadow-2xl">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-mono-tech uppercase tracking-wider text-[#D4FF00] font-bold flex items-center gap-1.5">
-              <ShieldAlert className="w-4 h-4" />
-              Broadcast Road Condition Pin at Your GPS Position ({selfAthlete.progress.toFixed(1)}%)
-            </span>
-            <button
-              onClick={() => setShowReportDrawer(false)}
-              className="text-xs font-mono-tech text-slate-400 hover:text-white cursor-pointer"
-            >
-              [CLOSE]
-            </button>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-            {quickHazardPresets.map((preset) => (
-              <button
-                key={preset.title}
-                onClick={() => {
-                  onAddHazardPin(preset.type, preset.title, preset.description);
-                  setShowReportDrawer(false);
-                }}
-                className={`p-2.5 rounded-xl border text-left transition-all hover:scale-[1.01] cursor-pointer ${
-                  CONDITION_COLORS[preset.type].bg
-                } ${CONDITION_COLORS[preset.type].border}`}
-              >
-                <div
-                  className={`text-xs font-bold ${
-                    CONDITION_COLORS[preset.type].text
-                  }`}
+        <View style={styles.reportDrawer}>
+          <View style={styles.reportDrawerHeader}>
+            <View style={styles.reportDrawerTitleRow}>
+              <ShieldAlert size={14} color="#D4FF00" />
+              <Text style={styles.reportDrawerTitle}>
+                Broadcast Road Pin at GPS {selfAthlete.progress.toFixed(1)}%
+              </Text>
+            </View>
+            <Pressable onPress={() => setShowReportDrawer(false)}>
+              <Text style={styles.closeDrawerText}>[CLOSE]</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.presetsGrid}>
+            {quickHazardPresets.map((preset) => {
+              const pColor = CONDITION_COLORS[preset.type];
+              return (
+                <Pressable
+                  key={preset.title}
+                  onPress={() => {
+                    onAddHazardPin(
+                      preset.type,
+                      preset.title,
+                      preset.description
+                    );
+                    setShowReportDrawer(false);
+                  }}
+                  style={[
+                    styles.presetCard,
+                    {
+                      backgroundColor: pColor.bgHex,
+                      borderColor: pColor.borderHex,
+                    },
+                  ]}
                 >
-                  {preset.title}
-                </div>
-                <div className="text-[11px] text-slate-300 mt-0.5 line-clamp-2">
-                  {preset.description}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
+                  <Text
+                    style={[styles.presetTitle, { color: pColor.textHex }]}
+                  >
+                    {preset.title}
+                  </Text>
+                  <Text style={styles.presetDesc} numberOfLines={2}>
+                    {preset.description}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
       )}
 
-      {/* VECTOR GPS MAP CANVAS */}
-      <div className="relative flex-1 w-full min-h-[280px] sm:min-h-[320px] flex items-center justify-center">
-        <svg
+      {/* VECTOR GPS MAP CANVAS (react-native-svg) */}
+      <View style={styles.mapCanvasWrap}>
+        <Svg
           viewBox="0 0 800 420"
-          className="w-full h-full object-cover select-none"
+          width="100%"
+          height="100%"
           preserveAspectRatio="xMidYMid slice"
         >
-          <defs>
-            <radialGradient id="mapGlow" cx="55%" cy="45%" r="55%">
-              <stop offset="0%" stopColor="#162238" stopOpacity="0.65" />
-              <stop offset="100%" stopColor="#080B10" stopOpacity="0.95" />
-            </radialGradient>
-            <pattern
-              id="tacticalGrid"
-              width="48"
-              height="48"
-              patternUnits="userSpaceOnUse"
-            >
-              <path
-                d="M 48 0 L 0 0 0 48"
-                fill="none"
-                stroke="rgba(148, 163, 184, 0.07)"
-                strokeWidth="1"
-              />
-            </pattern>
-          </defs>
+          <Defs>
+            <RadialGradient id="mapGlow" cx="55%" cy="45%" r="55%">
+              <Stop offset="0%" stopColor="#162238" stopOpacity="0.7" />
+              <Stop offset="100%" stopColor="#080B10" stopOpacity="0.98" />
+            </RadialGradient>
+          </Defs>
 
           {/* Base Dark Asphalt & Bay Water Geometry */}
-          <rect width="800" height="420" fill="url(#mapGlow)" />
-          <rect width="800" height="420" fill="url(#tacticalGrid)" />
+          <Rect width="800" height="420" fill="url(#mapGlow)" />
+
+          {/* Subtle Grid Lines */}
+          {[80, 160, 240, 320, 400, 480, 560, 640, 720].map((gx) => (
+            <Line
+              key={`gx-${gx}`}
+              x1={gx}
+              y1={0}
+              x2={gx}
+              y2={420}
+              stroke="rgba(148, 163, 184, 0.06)"
+              strokeWidth="1"
+            />
+          ))}
+          {[70, 140, 210, 280, 350].map((gy) => (
+            <Line
+              key={`gy-${gy}`}
+              x1={0}
+              y1={gy}
+              x2={800}
+              y2={gy}
+              stroke="rgba(148, 163, 184, 0.06)"
+              strokeWidth="1"
+            />
+          ))}
 
           {/* Stylized Bay Coastline & Topographic Elevation Contours */}
-          <path
+          <Path
             d="M 0,240 Q 180,210 330,145 T 620,40 L 0,0 Z"
-            fill="rgba(14, 116, 144, 0.09)"
-            stroke="rgba(56, 189, 248, 0.16)"
+            fill="rgba(14, 116, 144, 0.12)"
+            stroke="rgba(56, 189, 248, 0.2)"
             strokeWidth="1.5"
           />
-          <path
+          <Path
             d="M 450,390 Q 560,260 790,190"
             fill="none"
-            stroke="rgba(255,255,255,0.05)"
+            stroke="rgba(255,255,255,0.06)"
             strokeWidth="1"
-            strokeDasharray="6 6"
+            strokeDasharray="6,6"
           />
-          <path
+          <Path
             d="M 110,395 Q 320,310 560,250 T 790,130"
             fill="none"
-            stroke="rgba(255,255,255,0.06)"
+            stroke="rgba(255,255,255,0.07)"
             strokeWidth="1.2"
           />
-          <ellipse
+          <Ellipse
             cx="650"
             cy="115"
             rx="115"
             ry="62"
             fill="none"
-            stroke="rgba(239, 68, 68, 0.12)"
-            strokeDasharray="4 4"
+            stroke="rgba(239, 68, 68, 0.14)"
+            strokeDasharray="4,4"
           />
-          <ellipse
+          <Ellipse
             cx="650"
             cy="115"
             rx="72"
             ry="38"
             fill="none"
-            stroke="rgba(239, 68, 68, 0.18)"
-            strokeDasharray="3 3"
+            stroke="rgba(239, 68, 68, 0.2)"
+            strokeDasharray="3,3"
           />
 
-          {/* Wind Vector Arrows when Wind Overlay is active */}
+          {/* Wind Vector Arrows */}
           {showWindOverlay && (
-            <g opacity="0.45">
+            <G opacity="0.55">
               {[
                 { x: 210, y: 155 },
                 { x: 375, y: 135 },
                 { x: 510, y: 95 },
               ].map((w, idx) => (
-                <g key={idx} transform={`translate(${w.x}, ${w.y}) rotate(22)`}>
-                  <line
+                <G
+                  key={idx}
+                  transform={`translate(${w.x}, ${w.y}) rotate(22)`}
+                >
+                  <Line
                     x1="0"
                     y1="0"
                     x2="38"
                     y2="0"
                     stroke="#38BDF8"
                     strokeWidth="1.5"
-                    strokeDasharray="4 3"
+                    strokeDasharray="4,3"
                   />
-                  <polygon points="38,-3 45,0 38,3" fill="#38BDF8" />
-                  <text
+                  <Polygon points="38,-3 45,0 38,3" fill="#38BDF8" />
+                  <SvgText
                     x="4"
                     y="-6"
                     fill="#38BDF8"
                     fontSize="9"
-                    fontFamily="JetBrains Mono, monospace"
+                    fontWeight="600"
                   >
                     WIND {route.headwindMph}MPH
-                  </text>
-                </g>
+                  </SvgText>
+                </G>
               ))}
-            </g>
+            </G>
           )}
 
           {/* Base Route Track Casing */}
-          <polyline
+          <Polyline
             points={buildSegmentSvgPoints(0, 100)}
             fill="none"
             stroke="rgba(15, 23, 42, 0.95)"
@@ -344,10 +435,10 @@ export default function TacticalRouteMap({
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-          <polyline
+          <Polyline
             points={buildSegmentSvgPoints(0, 100)}
             fill="none"
-            stroke="rgba(255, 255, 255, 0.14)"
+            stroke="rgba(255, 255, 255, 0.15)"
             strokeWidth="10"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -358,76 +449,74 @@ export default function TacticalRouteMap({
             route.segments.map((seg) => {
               const pts = buildSegmentSvgPoints(seg.startPct, seg.endPct);
               const strokeHex = CONDITION_COLORS[seg.condition].hex;
-              const midPt = getPointAtProgress((seg.startPct + seg.endPct) / 2);
+              const midPt = getPointAtProgress(
+                (seg.startPct + seg.endPct) / 2
+              );
               return (
-                <g key={seg.id}>
-                  <polyline
+                <G key={seg.id}>
+                  <Polyline
                     points={pts}
                     fill="none"
                     stroke={strokeHex}
                     strokeWidth="7"
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    opacity="0.82"
+                    opacity="0.85"
                   />
-                  {/* Animated directional flow dashes along the road segment */}
-                  <polyline
+                  <Polyline
                     points={pts}
                     fill="none"
                     stroke="#FFFFFF"
                     strokeWidth="2"
-                    strokeDasharray="6 18"
-                    className="animate-route-flow"
+                    strokeDasharray="6,18"
                     opacity="0.55"
                   />
-                  {/* Segment Label Pill on Map */}
-                  <g transform={`translate(${midPt.x}, ${midPt.y + 24})`}>
-                    <rect
-                      x="-64"
+                  <G transform={`translate(${midPt.x}, ${midPt.y + 24})`}>
+                    <Rect
+                      x="-68"
                       y="-10"
-                      width="128"
+                      width="136"
                       height="18"
                       rx="5"
-                      fill="rgba(8, 11, 16, 0.88)"
+                      fill="rgba(8, 11, 16, 0.9)"
                       stroke={strokeHex}
                       strokeWidth="1"
                     />
-                    <text
+                    <SvgText
                       x="0"
-                      y="2"
+                      y="2.5"
                       textAnchor="middle"
                       fill={strokeHex}
                       fontSize="8.5"
-                      fontFamily="JetBrains Mono, monospace"
-                      fontWeight="600"
+                      fontWeight="700"
                     >
                       {seg.gradePct > 4
                         ? `GRADE +${seg.gradePct}% · CAUTION`
                         : seg.conditionLabel.slice(0, 20)}
-                    </text>
-                  </g>
-                </g>
+                    </SvgText>
+                  </G>
+                </G>
               );
             })}
 
           {/* Draft / Distance Tether Line between YOU and Pack Leader */}
           {showPackTethers && leaderAthlete.id !== selfAthlete.id && (
-            <g>
-              <line
+            <G>
+              <Line
                 x1={selfPoint.x}
                 y1={selfPoint.y}
                 x2={leaderPoint.x}
                 y2={leaderPoint.y}
                 stroke="#00F0FF"
                 strokeWidth="2"
-                strokeDasharray="4 4"
+                strokeDasharray="4,4"
               />
-              <g
+              <G
                 transform={`translate(${(selfPoint.x + leaderPoint.x) / 2}, ${
                   (selfPoint.y + leaderPoint.y) / 2 - 14
                 })`}
               >
-                <rect
+                <Rect
                   x="-42"
                   y="-9"
                   width="84"
@@ -437,13 +526,12 @@ export default function TacticalRouteMap({
                   stroke="#00F0FF"
                   strokeWidth="1"
                 />
-                <text
+                <SvgText
                   x="0"
-                  y="2"
+                  y="2.5"
                   textAnchor="middle"
                   fill="#00F0FF"
                   fontSize="8.5"
-                  fontFamily="JetBrains Mono, monospace"
                   fontWeight="700"
                 >
                   GAP{' '}
@@ -453,33 +541,32 @@ export default function TacticalRouteMap({
                       1609.34
                   )}
                   m
-                </text>
-              </g>
-            </g>
+                </SvgText>
+              </G>
+            </G>
           )}
 
           {/* Checkpoint Nodes */}
           {route.checkpoints.map((cp) => {
             const pt = getPointAtProgress(cp.pct);
             return (
-              <g key={cp.label} transform={`translate(${pt.x}, ${pt.y})`}>
-                <circle
+              <G key={cp.label} transform={`translate(${pt.x}, ${pt.y})`}>
+                <Circle
                   r="5"
                   fill="#080B10"
                   stroke="#94A3B8"
                   strokeWidth="2"
                 />
-                <text
+                <SvgText
                   x="0"
                   y="-11"
                   textAnchor="middle"
                   fill="#94A3B8"
                   fontSize="9"
-                  fontFamily="JetBrains Mono, monospace"
                 >
                   {cp.label}
-                </text>
-              </g>
+                </SvgText>
+              </G>
             );
           })}
 
@@ -489,13 +576,12 @@ export default function TacticalRouteMap({
             const colorHex = CONDITION_COLORS[pin.type].hex;
             const isActive = activeHazard?.id === pin.id;
             return (
-              <g
+              <G
                 key={pin.id}
                 transform={`translate(${pt.x}, ${pt.y - 22})`}
-                onClick={() => setActiveHazardId(pin.id)}
-                className="cursor-pointer"
+                onPress={() => setActiveHazardId(pin.id)}
               >
-                <line
+                <Line
                   x1="0"
                   y1="8"
                   x2="0"
@@ -503,24 +589,23 @@ export default function TacticalRouteMap({
                   stroke={colorHex}
                   strokeWidth="2"
                 />
-                <circle
+                <Circle
                   r={isActive ? 11 : 8}
                   fill="#080B10"
                   stroke={colorHex}
                   strokeWidth="2.5"
                 />
-                <text
+                <SvgText
                   x="0"
                   y="3.5"
                   textAnchor="middle"
                   fill={colorHex}
                   fontSize="10"
                   fontWeight="800"
-                  fontFamily="JetBrains Mono, monospace"
                 >
                   !
-                </text>
-              </g>
+                </SvgText>
+              </G>
             );
           })}
 
@@ -532,15 +617,13 @@ export default function TacticalRouteMap({
             const ringColor = isSpeaking ? '#FF4D2A' : athlete.color;
 
             return (
-              <g
+              <G
                 key={athlete.id}
                 transform={`translate(${pt.x}, ${pt.y})`}
-                onClick={() => onSelectAthlete(athlete.id)}
-                className="cursor-pointer"
+                onPress={() => onSelectAthlete(athlete.id)}
               >
-                {/* Outer Pulse Halo if speaking on Walkie-Talkie or if Self */}
                 {(isSpeaking || athlete.isSelf || isSelected) && (
-                  <circle
+                  <Circle
                     r={isSpeaking ? 24 : 19}
                     fill="none"
                     stroke={ringColor}
@@ -549,21 +632,19 @@ export default function TacticalRouteMap({
                   />
                 )}
 
-                {/* Marker Dot & Speed Callout Tag */}
-                <circle
+                <Circle
                   r="12"
                   fill="#0B0F18"
                   stroke={ringColor}
                   strokeWidth="3"
                 />
-                <text
+                <SvgText
                   x="0"
                   y="3.5"
                   textAnchor="middle"
                   fill="#FFFFFF"
                   fontSize="8.5"
                   fontWeight="700"
-                  fontFamily="Plus Jakarta Sans, sans-serif"
                 >
                   {athlete.isSelf
                     ? 'YOU'
@@ -571,117 +652,415 @@ export default function TacticalRouteMap({
                         .split(' ')
                         .map((n) => n[0])
                         .join('')}
-                </text>
+                </SvgText>
 
-                {/* Floating Telemetry Callout Pill above Selected or Self Athlete */}
                 {(isSelected || athlete.isSelf || isSpeaking) && (
-                  <g transform="translate(0, -24)">
-                    <rect
-                      x="-48"
+                  <G transform="translate(0, -24)">
+                    <Rect
+                      x="-50"
                       y="-14"
-                      width="96"
+                      width="100"
                       height="18"
                       rx="5"
                       fill={isSpeaking ? '#FF4D2A' : '#080B10'}
                       stroke={ringColor}
                       strokeWidth="1.2"
                     />
-                    <text
+                    <SvgText
                       x="0"
                       y="-2"
                       textAnchor="middle"
                       fill="#FFFFFF"
                       fontSize="8.5"
-                      fontFamily="JetBrains Mono, monospace"
                       fontWeight="700"
                     >
                       {isSpeaking
                         ? `${athlete.name.split(' ')[0]} · MIC OPEN`
                         : `${athlete.name.split(' ')[0]} · ${athlete.speedMph.toFixed(1)}mph`}
-                    </text>
-                  </g>
+                    </SvgText>
+                  </G>
                 )}
-              </g>
+              </G>
             );
           })}
-        </svg>
-      </div>
+        </Svg>
+      </View>
 
       {/* BOTTOM TELEMETRY & ROAD CONDITION DETAIL STRIP */}
-      <div className="relative z-20 p-3.5 sm:p-4 bg-[#080B10]/95 border-t border-white/10 grid grid-cols-1 md:grid-cols-3 gap-3">
+      <View style={styles.bottomBar}>
         {/* Selected Athlete Telemetry Focus */}
-        <div className="flex items-center gap-3 bg-[#111726]/80 p-2.5 rounded-xl border border-white/10">
-          <img
-            src={selectedAthlete.avatar}
-            alt={selectedAthlete.name}
-            style={{ borderColor: selectedAthlete.color }}
-            className="w-10 h-10 rounded-full object-cover border-2 shrink-0"
+        <View style={styles.athleteFocusCard}>
+          <Image
+            source={{ uri: selectedAthlete.avatar }}
+            style={[
+              styles.focusAvatar,
+              { borderColor: selectedAthlete.color },
+            ]}
           />
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-bold text-white truncate">
+          <View style={{ flex: 1 }}>
+            <View style={styles.focusNameRow}>
+              <Text style={styles.focusName} numberOfLines={1}>
                 {selectedAthlete.name}
-              </span>
-              <span className="text-[10px] font-mono-tech px-1.5 py-0.5 rounded bg-white/10 text-slate-300">
-                {selectedAthlete.role}
-              </span>
-            </div>
-            <div className="text-[11px] font-mono-tech text-slate-400 mt-0.5">
-              {selectedAthlete.speedMph.toFixed(1)} mph · {selectedAthlete.heartRate} bpm ·{' '}
-              {selectedAthlete.cadence} {route.mode === 'run' ? 'spm' : 'rpm'}
-            </div>
-          </div>
-        </div>
+              </Text>
+              <View style={styles.roleTag}>
+                <Text style={styles.roleTagText}>{selectedAthlete.role}</Text>
+              </View>
+            </View>
+            <Text style={styles.focusStats}>
+              {selectedAthlete.speedMph.toFixed(1)} mph ·{' '}
+              {selectedAthlete.heartRate} bpm · {selectedAthlete.cadence}{' '}
+              {route.mode === 'run' ? 'spm' : 'rpm'}
+            </Text>
+          </View>
+        </View>
 
         {/* Active Road Condition / Hazard Inspector */}
-        <div className="flex items-center gap-3 bg-[#111726]/80 p-2.5 rounded-xl border border-white/10 md:col-span-2 justify-between">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div
-              className={`w-9 h-9 rounded-xl flex items-center justify-center border shrink-0 ${
-                CONDITION_COLORS[activeHazard.type].bg
-              } ${CONDITION_COLORS[activeHazard.type].border} ${
-                CONDITION_COLORS[activeHazard.type].text
-              }`}
+        <View style={styles.hazardInspectorCard}>
+          <View style={styles.hazardInspectorMain}>
+            <View
+              style={[
+                styles.hazardIconBox,
+                {
+                  backgroundColor: activeHazardStyle.bgHex,
+                  borderColor: activeHazardStyle.borderHex,
+                },
+              ]}
             >
               {activeHazard.type === 'optimal' ? (
-                <CheckCircle2 className="w-4 h-4" />
+                <CheckCircle2 size={16} color={activeHazardStyle.textHex} />
               ) : (
-                <AlertTriangle className="w-4 h-4" />
+                <AlertTriangle size={16} color={activeHazardStyle.textHex} />
               )}
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-white truncate">
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={styles.hazardHeaderRow}>
+                <Text style={styles.hazardTitle} numberOfLines={1}>
                   {activeHazard.title}
-                </span>
-                <span className="text-[10px] font-mono-tech text-slate-400">
-                  @ {activeHazard.progressPct.toFixed(0)}% route · via {activeHazard.reportedBy}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-300 truncate mt-0.5">
+                </Text>
+                <Text style={styles.hazardMeta}>
+                  @{activeHazard.progressPct.toFixed(0)}% ·{' '}
+                  {activeHazard.reportedBy}
+                </Text>
+              </View>
+              <Text style={styles.hazardDesc} numberOfLines={2}>
                 {activeHazard.description}
-              </p>
-            </div>
-          </div>
+              </Text>
+            </View>
+          </View>
 
-          <div className="hidden sm:flex items-center gap-1 shrink-0">
-            {hazardPins.map((pin) => (
-              <button
-                key={pin.id}
-                onClick={() => setActiveHazardId(pin.id)}
-                className={`w-6 h-6 rounded-lg font-mono-tech text-[10px] font-bold border transition-all cursor-pointer ${
-                  activeHazard.id === pin.id
-                    ? 'bg-white text-black border-white'
-                    : 'bg-black/50 text-slate-400 border-white/15 hover:text-white'
-                }`}
-                title={pin.title}
-              >
-                !
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
+          <View style={styles.pinSelectorRow}>
+            {hazardPins.map((pin, idx) => {
+              const active = activeHazard.id === pin.id;
+              return (
+                <Pressable
+                  key={pin.id}
+                  onPress={() => setActiveHazardId(pin.id)}
+                  style={[
+                    styles.pinSwitchBtn,
+                    active && styles.pinSwitchBtnActive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.pinSwitchBtnText,
+                      active && styles.pinSwitchBtnTextActive,
+                    ]}
+                  >
+                    #{idx + 1}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      </View>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    backgroundColor: '#0B0F18',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden',
+  },
+  topHud: {
+    padding: 12,
+    gap: 8,
+    backgroundColor: '#080B10',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  hudRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+  },
+  locationPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: '#111726',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  locationText: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  weatherPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: '#111726',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  weatherText: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    color: '#CBD5E1',
+  },
+  weatherDivider: {
+    fontSize: 11,
+    color: '#475569',
+  },
+  layerControlsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  layerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: '#111726',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  layerBtnEmerald: {
+    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+    borderColor: 'rgba(52, 211, 153, 0.5)',
+  },
+  layerBtnCyan: {
+    backgroundColor: 'rgba(0, 240, 255, 0.15)',
+    borderColor: 'rgba(0, 240, 255, 0.5)',
+  },
+  layerBtnSky: {
+    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    borderColor: 'rgba(56, 189, 248, 0.5)',
+  },
+  layerBtnText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#94A3B8',
+    textTransform: 'uppercase',
+  },
+  pinActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: '#D4FF00',
+    marginLeft: 'auto',
+  },
+  pinActionBtnText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+    color: '#080B10',
+    textTransform: 'uppercase',
+  },
+  reportDrawer: {
+    margin: 12,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: '#111726',
+    borderWidth: 1,
+    borderColor: 'rgba(212, 255, 0, 0.45)',
+    gap: 8,
+  },
+  reportDrawerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  reportDrawerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  reportDrawerTitle: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#D4FF00',
+    textTransform: 'uppercase',
+  },
+  closeDrawerText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+    fontWeight: '700',
+  },
+  presetsGrid: {
+    gap: 8,
+  },
+  presetCard: {
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  presetTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  presetDesc: {
+    fontSize: 11,
+    color: '#CBD5E1',
+    marginTop: 2,
+  },
+  mapCanvasWrap: {
+    width: '100%',
+    height: 270,
+    backgroundColor: '#080B10',
+  },
+  bottomBar: {
+    padding: 12,
+    backgroundColor: '#080B10',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    gap: 10,
+  },
+  athleteFocusCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#111726',
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  focusAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 2,
+  },
+  focusNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  focusName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  roleTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  roleTagText: {
+    fontSize: 9,
+    fontFamily: MONO_FONT,
+    color: '#CBD5E1',
+  },
+  focusStats: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+    marginTop: 2,
+  },
+  hazardInspectorCard: {
+    backgroundColor: '#111726',
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    gap: 8,
+  },
+  hazardInspectorMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  hazardIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hazardHeaderRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  hazardTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  hazardMeta: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  hazardDesc: {
+    fontSize: 11,
+    color: '#CBD5E1',
+    marginTop: 2,
+  },
+  pinSelectorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  pinSwitchBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  pinSwitchBtnActive: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#FFFFFF',
+  },
+  pinSwitchBtnText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#94A3B8',
+  },
+  pinSwitchBtnTextActive: {
+    color: '#080B10',
+  },
+});

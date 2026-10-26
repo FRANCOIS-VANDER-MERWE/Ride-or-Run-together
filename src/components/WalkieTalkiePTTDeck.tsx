@@ -1,5 +1,13 @@
 import React, { useState } from 'react';
 import {
+  View,
+  Text,
+  Pressable,
+  Image,
+  StyleSheet,
+  Platform,
+} from 'react-native';
+import {
   Mic,
   MicOff,
   Radio,
@@ -10,7 +18,7 @@ import {
   Send,
   ShieldCheck,
   Users,
-} from 'lucide-react';
+} from './Icons';
 import { Athlete, VoiceTransmission } from '../data/sessionData';
 
 interface WalkieTalkiePTTDeckProps {
@@ -35,6 +43,12 @@ const QUICK_VOICE_CALLOUTS = [
   'How is everyone feeling on this 170 BPM Spotify sync?',
 ];
 
+const MONO_FONT = Platform.select({
+  ios: 'Menlo',
+  android: 'monospace',
+  default: 'monospace',
+});
+
 export default function WalkieTalkiePTTDeck({
   isPttActive,
   isLatched,
@@ -55,252 +69,590 @@ export default function WalkieTalkiePTTDeck({
   const isChannelOpen = Boolean(activeSpeakerId);
 
   return (
-    <section
-      className={`relative rounded-2xl border p-4 sm:p-5 transition-all duration-300 shadow-2xl flex flex-col justify-between ${
-        isChannelOpen
-          ? 'bg-gradient-to-b from-[#1F1215] to-[#0E131D] border-[#FF4D2A]/70 shadow-[0_0_35px_rgba(255,77,42,0.22)]'
-          : 'bg-[#0E131D]/95 border-white/10'
-      }`}
+    <View
+      style={[
+        styles.card,
+        isChannelOpen && styles.cardChannelOpen,
+      ]}
     >
       {/* Header: LiveKit Cloud Call-to-Call Mesh Status */}
-      <div className="flex items-center justify-between gap-2 mb-3.5">
-        <div className="flex items-center gap-2.5">
-          <div
-            className={`w-9 h-9 rounded-xl flex items-center justify-center border transition-colors ${
-              isChannelOpen
-                ? 'bg-[#FF4D2A] text-white border-[#FF4D2A] shadow-[0_0_15px_rgba(255,77,42,0.6)]'
-                : 'bg-[#FF4D2A]/15 text-[#FF4D2A] border-[#FF4D2A]/35'
-            }`}
+      <View style={styles.headerRow}>
+        <View style={styles.brandRow}>
+          <View
+            style={[
+              styles.radioIconBox,
+              isChannelOpen && styles.radioIconBoxActive,
+            ]}
           >
-            <Radio className="w-4 h-4" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-mono-tech uppercase tracking-widest text-[#FF4D2A] font-bold">
+            <Radio
+              size={16}
+              color={isChannelOpen ? '#FFFFFF' : '#FF4D2A'}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={styles.badgeRow}>
+              <Text style={styles.livekitLabel}>
                 WALKIE-TALKIE · LIVEKIT CLOUD
-              </span>
-              <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-400/30 text-[10px] font-mono-tech text-emerald-300">
-                5/5 WEBRTC MESH
-              </span>
-            </div>
-            <h3 className="font-display font-bold text-sm sm:text-base text-white">
+              </Text>
+              <View style={styles.meshBadge}>
+                <Text style={styles.meshBadgeText}>5/5 WEBRTC MESH</Text>
+              </View>
+            </View>
+            <Text style={styles.deckTitle}>
               Call-to-Call Pack Voice Channel
-            </h3>
-          </div>
-        </div>
+            </Text>
+          </View>
+        </View>
 
-        <div className="flex items-center gap-1.5">
-          {/* Toggle PTT Chirp Sound */}
-          <button
-            onClick={onToggleSoundEffects}
-            className={`p-2 rounded-xl border text-xs font-mono-tech transition-all cursor-pointer ${
-              soundEffectsEnabled
-                ? 'bg-white/10 border-white/20 text-white'
-                : 'bg-black/40 border-white/10 text-slate-500'
-            }`}
-            title={
-              soundEffectsEnabled
-                ? 'Walkie-Talkie Chirp Tones: ON'
-                : 'Walkie-Talkie Chirp Tones: MUTED'
-            }
+        <View style={styles.headerControls}>
+          <Pressable
+            onPress={onToggleSoundEffects}
+            style={[
+              styles.soundBtn,
+              soundEffectsEnabled && styles.soundBtnActive,
+            ]}
           >
             {soundEffectsEnabled ? (
-              <Volume2 className="w-4 h-4 text-[#D4FF00]" />
+              <Volume2 size={15} color="#D4FF00" />
             ) : (
-              <VolumeX className="w-4 h-4" />
+              <VolumeX size={15} color="#64748B" />
             )}
-          </button>
+          </Pressable>
 
-          {/* Simulate Incoming Teammate Radio Call */}
-          <button
-            onClick={onTriggerTeammateCallout}
-            className="px-2.5 py-1.5 rounded-xl bg-white/8 hover:bg-white/15 border border-white/15 text-[11px] font-mono-tech text-slate-200 flex items-center gap-1.5 transition-all cursor-pointer"
-            title="Simulate a teammate pressing their PTT button over LiveKit Cloud"
+          <Pressable
+            onPress={onTriggerTeammateCallout}
+            style={styles.demoPeerBtn}
           >
-            <Sparkles className="w-3.5 h-3.5 text-[#00F0FF]" />
-            <span>Demo Peer Call</span>
-          </button>
-        </div>
-      </div>
+            <Sparkles size={13} color="#00F0FF" />
+            <Text style={styles.demoPeerBtnText}>Demo Peer Call</Text>
+          </Pressable>
+        </View>
+      </View>
 
       {/* Live Channel Status Banner + Audio Waveform Visualizer */}
-      <div className="bg-[#080B10]/90 rounded-xl p-3 border border-white/10 mb-3.5">
-        <div className="flex items-center justify-between text-xs mb-2">
-          <div className="flex items-center gap-2">
-            <span
-              className={`w-2.5 h-2.5 rounded-full ${
-                isChannelOpen
-                  ? 'bg-[#FF4D2A] animate-ping'
-                  : 'bg-emerald-400'
-              }`}
+      <View style={styles.visualizerBox}>
+        <View style={styles.statusHeaderRow}>
+          <View style={styles.statusIndicatorRow}>
+            <View
+              style={[
+                styles.statusDot,
+                {
+                  backgroundColor: isChannelOpen ? '#FF4D2A' : '#10B981',
+                },
+              ]}
             />
-            <span className="font-mono-tech font-bold text-white uppercase">
+            <Text style={styles.statusText} numberOfLines={1}>
               {isPttActive
                 ? 'TRANSMITTING TO ALL 5 PHONES...'
                 : activeSpeaker
                 ? `RECEIVING: ${activeSpeaker.name.toUpperCase()}`
                 : 'CHANNEL STANDBY · READY TO TALK'}
-            </span>
-          </div>
-          <span className="text-[10px] font-mono-tech text-slate-400">
-            {isChannelOpen ? 'SPOTIFY AUTO-DUCKED TO 25%' : 'OPUS 48KHZ · 18MS'}
-          </span>
-        </div>
+            </Text>
+          </View>
+          <Text style={styles.codecText}>
+            {isChannelOpen ? 'SPOTIFY AUTO-DUCKED 25%' : 'OPUS 48KHZ · 18MS'}
+          </Text>
+        </View>
 
-        {/* 18-Bar Real-Time Voice Spectrum Visualizer */}
-        <div className="h-9 flex items-center justify-between gap-1 px-1">
+        {/* 20-Bar Real-Time Voice Spectrum Visualizer */}
+        <View style={styles.spectrumRow}>
           {Array.from({ length: 20 }).map((_, idx) => {
             const activeHeight = isChannelOpen
               ? 28 + ((idx * 17) % 70)
-              : 14 + ((idx * 7) % 12);
+              : 16 + ((idx * 7) % 14);
             return (
-              <div
+              <View
                 key={idx}
-                style={{
-                  height: `${activeHeight}%`,
-                  transitionDelay: `${idx * 15}ms`,
-                }}
-                className={`flex-1 rounded-full transition-all duration-150 ${
-                  isPttActive
-                    ? 'bg-gradient-to-t from-[#FF4D2A] to-[#D4FF00]'
-                    : activeSpeaker
-                    ? 'bg-gradient-to-t from-[#00F0FF] to-emerald-300'
-                    : 'bg-slate-700/60'
-                }`}
+                style={[
+                  styles.spectrumBar,
+                  {
+                    height: `${activeHeight}%`,
+                    backgroundColor: isPttActive
+                      ? '#FF4D2A'
+                      : activeSpeaker
+                      ? '#00F0FF'
+                      : '#334155',
+                  },
+                ]}
               />
             );
           })}
-        </div>
-      </div>
+        </View>
+      </View>
 
-      {/* TACTILE HARDWARE PUSH-TO-TALK (PTT) PADDLE BUTTON */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 mb-3.5">
-        <button
-          type="button"
-          onMouseDown={onStartPtt}
-          onMouseUp={onStopPtt}
-          onMouseLeave={() => {
-            if (isPttActive && !isLatched) onStopPtt();
+      {/* TACTILE HARDWARE PUSH-TO-TALK (PTT) PADDLE BUTTON + HANDS-FREE LATCH */}
+      <View style={styles.pttRow}>
+        <Pressable
+          onPressIn={onStartPtt}
+          onPressOut={() => {
+            if (!isLatched) onStopPtt();
           }}
-          onTouchStart={(e) => {
-            e.preventDefault();
-            onStartPtt();
-          }}
-          onTouchEnd={(e) => {
-            e.preventDefault();
-            onStopPtt();
-          }}
-          className={`sm:col-span-3 relative py-4 px-5 rounded-2xl font-display font-bold text-sm sm:text-base uppercase tracking-wider flex items-center justify-center gap-3 transition-all select-none cursor-pointer border-2 ${
-            isPttActive
-              ? 'bg-[#FF4D2A] text-white border-white shadow-[0_0_30px_rgba(255,77,42,0.75)] scale-[0.99]'
-              : 'bg-gradient-to-r from-[#FF4D2A]/90 to-[#FF6B2A]/90 hover:from-[#FF4D2A] hover:to-[#FF6B2A] text-white border-[#FF4D2A]/50 shadow-lg'
-          }`}
+          style={[
+            styles.pttPaddleBtn,
+            isPttActive && styles.pttPaddleBtnActive,
+          ]}
         >
           {isPttActive ? (
             <>
-              <Waves className="w-5 h-5 animate-pulse" />
-              <span>VOICE OPEN TO EVERYONE · RELEASE TO END</span>
+              <Waves size={20} color="#FFFFFF" />
+              <Text style={styles.pttPaddleText}>
+                VOICE OPEN · RELEASE TO END
+              </Text>
             </>
           ) : (
             <>
-              <Mic className="w-5 h-5" />
-              <span>HOLD TO TALK TO PACK [OR HOLD SPACE]</span>
+              <Mic size={20} color="#FFFFFF" />
+              <Text style={styles.pttPaddleText}>
+                HOLD TO TALK TO PACK
+              </Text>
             </>
           )}
-        </button>
+        </Pressable>
 
-        {/* Hands-Free Latch Toggle for Runners/Cyclists */}
-        <button
-          type="button"
-          onClick={onToggleLatch}
-          className={`py-3 px-3 rounded-2xl border font-mono-tech text-xs font-bold uppercase flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-            isLatched
-              ? 'bg-[#D4FF00] text-[#080B10] border-[#D4FF00] shadow-[0_0_20px_rgba(212,255,0,0.4)]'
-              : 'bg-[#080B10] text-slate-300 border-white/15 hover:border-white/30'
-          }`}
-          title="Latch microphone open hands-free while running or riding"
+        <Pressable
+          onPress={onToggleLatch}
+          style={[
+            styles.latchBtn,
+            isLatched && styles.latchBtnActive,
+          ]}
         >
           {isLatched ? (
-            <Mic className="w-4 h-4" />
+            <Mic size={16} color="#080B10" />
           ) : (
-            <MicOff className="w-4 h-4 text-slate-400" />
+            <MicOff size={16} color="#94A3B8" />
           )}
-          <span>{isLatched ? 'LATCHED ON' : 'HANDS-FREE'}</span>
-        </button>
-      </div>
+          <Text
+            style={[
+              styles.latchBtnText,
+              isLatched && styles.latchBtnTextActive,
+            ]}
+          >
+            {isLatched ? 'LATCHED' : 'HANDS-FREE'}
+          </Text>
+        </Pressable>
+      </View>
 
       {/* Quick 1-Tap Voice Callout Preset Bar */}
-      <div className="mb-3.5">
-        <div className="flex items-center justify-between text-[11px] font-mono-tech text-slate-400 mb-1.5">
-          <span>QUICK VOICE CALLOUT (BROADCASTS ON RELEASE):</span>
-          <span className="text-[#D4FF00]">LIVEKIT API CHANNEL</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={selectedPresetIdx}
-            onChange={(e) => setSelectedPresetIdx(Number(e.target.value))}
-            className="flex-1 bg-[#080B10] border border-white/15 rounded-xl px-3 py-2 text-xs text-white font-medium focus:outline-none focus:border-[#D4FF00]"
-          >
-            {QUICK_VOICE_CALLOUTS.map((msg, i) => (
-              <option key={i} value={i}>
-                "{msg}"
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => onSendQuickCallout(QUICK_VOICE_CALLOUTS[selectedPresetIdx])}
-            className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-mono-tech font-bold text-white flex items-center gap-1.5 shrink-0 cursor-pointer"
-          >
-            <Send className="w-3.5 h-3.5 text-[#FF4D2A]" />
-            <span>Transmit</span>
-          </button>
-        </div>
-      </div>
+      <View style={styles.presetSection}>
+        <View style={styles.presetHeaderRow}>
+          <Text style={styles.presetLabel}>
+            QUICK VOICE CALLOUT PRESETS:
+          </Text>
+          <Text style={styles.presetApiLabel}>LIVEKIT API CHANNEL</Text>
+        </View>
+
+        <View style={styles.presetChipsWrap}>
+          {QUICK_VOICE_CALLOUTS.map((msg, i) => {
+            const selected = i === selectedPresetIdx;
+            return (
+              <Pressable
+                key={i}
+                onPress={() => setSelectedPresetIdx(i)}
+                style={[
+                  styles.presetChip,
+                  selected && styles.presetChipSelected,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.presetChipText,
+                    selected && styles.presetChipTextSelected,
+                  ]}
+                  numberOfLines={1}
+                >
+                  "{msg}"
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <Pressable
+          onPress={() =>
+            onSendQuickCallout(QUICK_VOICE_CALLOUTS[selectedPresetIdx])
+          }
+          style={styles.transmitBtn}
+        >
+          <Send size={14} color="#FF4D2A" />
+          <Text style={styles.transmitBtnText}>
+            Transmit Selected Callout to Pack
+          </Text>
+        </Pressable>
+      </View>
 
       {/* Recent Pack Voice Callouts Feed */}
-      <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-        {voiceFeed.slice(0, 3).map((vc) => (
-          <div
-            key={vc.id}
-            className="flex items-start gap-2.5 p-2.5 rounded-xl bg-[#080B10]/75 border border-white/10"
-          >
-            <img
-              src={vc.speakerAvatar}
-              alt={vc.speakerName}
-              style={{ borderColor: vc.speakerColor }}
-              className="w-7 h-7 rounded-full object-cover border-2 shrink-0 mt-0.5"
+      <View style={styles.feedList}>
+        {voiceFeed.slice(0, 4).map((vc) => (
+          <View key={vc.id} style={styles.feedItem}>
+            <Image
+              source={{ uri: vc.speakerAvatar }}
+              style={[
+                styles.feedAvatar,
+                { borderColor: vc.speakerColor },
+              ]}
             />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center justify-between gap-2">
-                <span
-                  style={{ color: vc.speakerColor }}
-                  className="text-xs font-bold truncate"
+            <View style={{ flex: 1 }}>
+              <View style={styles.feedHeaderRow}>
+                <Text
+                  style={[styles.feedSpeaker, { color: vc.speakerColor }]}
+                  numberOfLines={1}
                 >
                   {vc.speakerName}
-                </span>
-                <span className="text-[10px] font-mono-tech text-slate-400 shrink-0">
+                </Text>
+                <Text style={styles.feedTimestamp}>
                   @{vc.progressAtCallPct.toFixed(0)}% · {vc.timestamp}
-                </span>
-              </div>
-              <p className="text-xs text-slate-200 mt-0.5 leading-snug">
-                "{vc.transcript}"
-              </p>
-            </div>
-          </div>
+                </Text>
+              </View>
+              <Text style={styles.feedTranscript}>"{vc.transcript}"</Text>
+            </View>
+          </View>
         ))}
-      </div>
+      </View>
 
       {/* Footer LiveKit Cloud API Pill */}
-      <div className="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between text-[11px] font-mono-tech text-slate-400">
-        <span className="flex items-center gap-1.5">
-          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-          LiveKit Cloud SF-West · Call-to-Call Minutes Active
-        </span>
-        <span className="flex items-center gap-1 text-slate-300">
-          <Users className="w-3.5 h-3.5 text-[#00F0FF]" />5 Phones Connected
-        </span>
-      </div>
-    </section>
+      <View style={styles.footerRow}>
+        <View style={styles.footerItem}>
+          <ShieldCheck size={13} color="#10B981" />
+          <Text style={styles.footerText}>
+            LiveKit Cloud SF-West · Call-to-Call Active
+          </Text>
+        </View>
+        <View style={styles.footerItem}>
+          <Users size={13} color="#00F0FF" />
+          <Text style={[styles.footerText, { color: '#CBD5E1' }]}>
+            5 Phones
+          </Text>
+        </View>
+      </View>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  card: {
+    backgroundColor: '#0E131D',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: 14,
+    gap: 12,
+  },
+  cardChannelOpen: {
+    backgroundColor: '#191014',
+    borderColor: 'rgba(255, 77, 42, 0.7)',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  radioIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: 'rgba(255, 77, 42, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 77, 42, 0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioIconBoxActive: {
+    backgroundColor: '#FF4D2A',
+    borderColor: '#FF4D2A',
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  livekitLabel: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+    color: '#FF4D2A',
+    letterSpacing: 0.5,
+  },
+  meshBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(52, 211, 153, 0.35)',
+  },
+  meshBadgeText: {
+    fontSize: 9,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#6EE7B7',
+  },
+  deckTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginTop: 2,
+  },
+  headerControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  soundBtn: {
+    padding: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  soundBtnActive: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  demoPeerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  demoPeerBtnText: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '600',
+    color: '#E2E8F0',
+  },
+  visualizerBox: {
+    backgroundColor: '#080B10',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    gap: 10,
+  },
+  statusHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  statusIndicatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusText: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  codecText: {
+    fontSize: 9,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  spectrumRow: {
+    height: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 4,
+  },
+  spectrumBar: {
+    flex: 1,
+    borderRadius: 999,
+  },
+  pttRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  pttPaddleBtn: {
+    flex: 3,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    backgroundColor: '#FF4D2A',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 107, 42, 0.8)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  pttPaddleBtnActive: {
+    backgroundColor: '#FF3311',
+    borderColor: '#FFFFFF',
+    transform: [{ scale: 0.99 }],
+  },
+  pttPaddleText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  latchBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 16,
+    backgroundColor: '#080B10',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  latchBtnActive: {
+    backgroundColor: '#D4FF00',
+    borderColor: '#D4FF00',
+  },
+  latchBtnText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#CBD5E1',
+  },
+  latchBtnTextActive: {
+    color: '#080B10',
+  },
+  presetSection: {
+    gap: 6,
+  },
+  presetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  presetLabel: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  presetApiLabel: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#D4FF00',
+  },
+  presetChipsWrap: {
+    gap: 6,
+  },
+  presetChip: {
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#080B10',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  presetChipSelected: {
+    borderColor: '#D4FF00',
+    backgroundColor: 'rgba(212, 255, 0, 0.09)',
+  },
+  presetChipText: {
+    fontSize: 11,
+    color: '#CBD5E1',
+  },
+  presetChipTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  transmitBtn: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 11,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  transmitBtnText: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textTransform: 'uppercase',
+  },
+  feedList: {
+    gap: 8,
+  },
+  feedItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: '#080B10',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  feedAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    marginTop: 2,
+  },
+  feedHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  feedSpeaker: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  feedTimestamp: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  feedTranscript: {
+    fontSize: 12,
+    color: '#E2E8F0',
+    marginTop: 2,
+    lineHeight: 17,
+  },
+  footerRow: {
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  footerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  footerText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+});

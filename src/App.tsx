@@ -1,5 +1,15 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
+  View,
+  Text,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Platform,
+} from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import {
   Activity,
   Bike,
   Footprints,
@@ -15,9 +25,12 @@ import {
   ShieldAlert,
   Heart,
   Zap,
-  Users,
-  CheckCircle2,
-} from 'lucide-react';
+  Map,
+  Mic,
+  Waves,
+  Navigation,
+  ChevronRight,
+} from './components/Icons';
 import {
   ActivityMode,
   Athlete,
@@ -45,6 +58,20 @@ import {
   playPttOpenChirp,
   playSyncBroadcastPulse,
 } from './utils/soundEffects';
+import {
+  broadcastMusicSyncSignal,
+  translateBroadcastToSpotifyPlayer,
+} from './services/spotifySyncService';
+import { walkieTalkieController } from './services/liveKitVoiceService';
+import { startDeviceGpsTracking } from './services/locationTelemetryService';
+
+export type BottomTabId = 'cockpit' | 'map' | 'ptt' | 'spotify' | 'architecture';
+
+const MONO_FONT = Platform.select({
+  ios: 'Menlo',
+  android: 'monospace',
+  default: 'monospace',
+});
 
 function formatPaceMinPerMile(speedMph: number): string {
   if (speedMph <= 0.5) return '--:--';
@@ -90,23 +117,31 @@ function formatNowTimestamp(): string {
 export default function App() {
   // Core Mode: 'run' ("Run Together") vs 'ride' ("Ride Together")
   const [mode, setMode] = useState<ActivityMode>('run');
-  const [activeView, setActiveView] = useState<'cockpit' | 'architecture'>('cockpit');
+  const [activeTab, setActiveTab] = useState<BottomTabId>('cockpit');
   const [isSimRunning, setIsSimRunning] = useState(true);
-  const [effortLevel, setEffortLevel] = useState<'recovery' | 'tempo' | 'surge'>('tempo');
+  const [useRealDeviceGps, setUseRealDeviceGps] = useState(false);
+  const [gpsNotice, setGpsNotice] = useState<string | null>(null);
+  const [effortLevel, setEffortLevel] = useState<
+    'recovery' | 'tempo' | 'surge'
+  >('tempo');
   const [showIosWidgetPreview, setShowIosWidgetPreview] = useState(false);
 
   // Athletes State
   const [athletes, setAthletes] = useState<Athlete[]>(INITIAL_ATHLETES);
-  const [selectedAthleteId, setSelectedAthleteId] = useState<string>('athlete-you');
+  const [selectedAthleteId, setSelectedAthleteId] =
+    useState<string>('athlete-you');
 
   // Road Conditions / Hazard Pins State
-  const [hazardPins, setHazardPins] = useState<RoadHazardPin[]>(INITIAL_HAZARD_PINS);
+  const [hazardPins, setHazardPins] =
+    useState<RoadHazardPin[]>(INITIAL_HAZARD_PINS);
 
   // Walkie-Talkie Push-To-Talk (LiveKit Cloud) State
   const [isPttActive, setIsPttActive] = useState(false);
   const [isPttLatched, setIsPttLatched] = useState(false);
   const [activeSpeakerId, setActiveSpeakerId] = useState<string | null>(null);
-  const [voiceFeed, setVoiceFeed] = useState<VoiceTransmission[]>(INITIAL_VOICE_CALLOUTS);
+  const [voiceFeed, setVoiceFeed] = useState<VoiceTransmission[]>(
+    INITIAL_VOICE_CALLOUTS
+  );
   const [soundEffectsEnabled, setSoundEffectsEnabled] = useState(true);
   const teammateCallCursor = useRef(0);
 
@@ -120,10 +155,12 @@ export default function App() {
 
   const currentRoute = ROUTE_CONFIGS[mode];
   const selfAthlete = athletes.find((a) => a.isSelf) || athletes[1];
+  const currentTrack =
+    SPOTIFY_PLAYLIST[currentTrackIndex] || SPOTIFY_PLAYLIST[0];
 
   // Helper to emit a Custom Broadcast API -> Client Spotify API translation event
   const emitCustomSpotifyBroadcast = useCallback(
-    (
+    async (
       action: BroadcastSignalEvent['action'],
       trackIdx: number,
       posSec: number,
@@ -131,26 +168,36 @@ export default function App() {
     ) => {
       const track = SPOTIFY_PLAYLIST[trackIdx] || SPOTIFY_PLAYLIST[0];
       const posMs = Math.round(posSec * 1000);
-      const rttCompMs = 11 + Math.floor(Math.random() * 5);
+      const sentEpoch = Date.now();
+
+      const customPayload = {
+        session_id: 'sf-884-pack-tempo',
+        initiator,
+        action,
+        spotify_track_uri: track.uri,
+        position_ms: posMs,
+        sent_at_epoch_ms: sentEpoch,
+      };
+
+      await broadcastMusicSyncSignal(customPayload);
+      const translated = await translateBroadcastToSpotifyPlayer(customPayload);
+
       const newEvent: BroadcastSignalEvent = {
         id: `sig-${Date.now()}`,
         timestamp: formatNowTimestamp(),
         initiator,
         action,
-        customEndpoint: 'POST https://api.pacelock.run/v1/session/sf-884/broadcast',
+        customEndpoint:
+          'POST https://api.pacelock.run/v1/session/sf-884/broadcast',
         customPayload: {
           session_id: 'sf-884-pack-tempo',
           broadcast_type: 'SPOTIFY_SYNC_SIGNAL',
           spotify_track_uri: track.uri,
           position_ms: posMs,
-          server_epoch_ms: Date.now(),
+          server_epoch_ms: sentEpoch,
         },
-        clientSpotifyEndpoint: 'PUT https://api.spotify.com/v1/me/player/play',
-        clientSpotifyBody: {
-          uris: [track.uri],
-          position_ms: posMs + rttCompMs,
-          device_compensation_ms: rttCompMs,
-        },
+        clientSpotifyEndpoint: translated.endpoint,
+        clientSpotifyBody: translated.body,
         peersTranslated: athletes.length,
         avgDriftMs: Number((3.8 + Math.random() * 2.8).toFixed(1)),
       };
@@ -158,6 +205,36 @@ export default function App() {
     },
     [athletes.length]
   );
+
+  // Optional Real Device GPS Tracking via `expo-location`
+  useEffect(() => {
+    if (!useRealDeviceGps) {
+      setGpsNotice(null);
+      return;
+    }
+
+    let sub: { remove: () => void } | null = null;
+    startDeviceGpsTracking(
+      (sample) => {
+        if (sample.speedMph > 0.2) {
+          setAthletes((prev) =>
+            prev.map((a) =>
+              a.isSelf ? { ...a, speedMph: sample.speedMph } : a
+            )
+          );
+        }
+      },
+      (errReason) => {
+        setGpsNotice(errReason);
+      }
+    ).then((s) => {
+      sub = s;
+    });
+
+    return () => {
+      sub?.remove();
+    };
+  }, [useRealDeviceGps]);
 
   // Switch between Run Together and Ride Together
   const handleSwitchMode = (newMode: ActivityMode) => {
@@ -168,7 +245,10 @@ export default function App() {
       prev.map((a) => ({
         ...a,
         speedMph: Number((a.speedMph * speedMultiplier).toFixed(1)),
-        cadence: newMode === 'ride' ? Math.round(a.cadence * 0.55) : Math.round(a.cadence / 0.55),
+        cadence:
+          newMode === 'ride'
+            ? Math.round(a.cadence * 0.55)
+            : Math.round(a.cadence / 0.55),
       }))
     );
     const matchingTrackIdx = SPOTIFY_PLAYLIST.findIndex(
@@ -186,22 +266,19 @@ export default function App() {
     }
   };
 
-  // Real-time 250ms Telemetry Simulation Loop (updates everyone's progress on the line, speed, and road segment effects)
+  // Real-time 250ms Telemetry Simulation Loop
   useEffect(() => {
     if (!isSimRunning) return;
     const interval = setInterval(() => {
       setAthletes((prev) =>
         prev.map((ath, idx) => {
-          // Find road segment impact factor for this athlete's position
           const seg =
             currentRoute.segments.find(
               (s) => ath.progress >= s.startPct && ath.progress <= s.endPct
             ) || currentRoute.segments[0];
 
           const baseModeSpeed =
-            mode === 'run'
-              ? 8.5 - idx * 0.14
-              : 23.6 - idx * 0.42;
+            mode === 'run' ? 8.5 - idx * 0.14 : 23.6 - idx * 0.42;
 
           const effortBoost = ath.isSelf
             ? effortLevel === 'surge'
@@ -215,11 +292,13 @@ export default function App() {
           const liveSpeed = Math.max(
             mode === 'run' ? 5.2 : 12.5,
             Number(
-              (baseModeSpeed * seg.speedImpactFactor * effortBoost + microWave).toFixed(1)
+              (
+                baseModeSpeed * seg.speedImpactFactor * effortBoost +
+                microWave
+              ).toFixed(1)
             )
           );
 
-          // Advance progress along the linear route
           const deltaPct =
             (liveSpeed / (mode === 'run' ? 145 : 380)) *
             (ath.isSelf && effortLevel === 'surge' ? 1.35 : 1);
@@ -243,10 +322,10 @@ export default function App() {
         })
       );
 
-      // Advance Spotify track timer
       if (isSpotifyPlaying) {
         setTrackProgressSec((prevSec) => {
-          const activeTrack = SPOTIFY_PLAYLIST[currentTrackIndex] || SPOTIFY_PLAYLIST[0];
+          const activeTrack =
+            SPOTIFY_PLAYLIST[currentTrackIndex] || SPOTIFY_PLAYLIST[0];
           if (prevSec + 0.25 >= activeTrack.durationSec) {
             return 0;
           }
@@ -256,7 +335,14 @@ export default function App() {
     }, 250);
 
     return () => clearInterval(interval);
-  }, [isSimRunning, mode, effortLevel, currentRoute.segments, isSpotifyPlaying, currentTrackIndex]);
+  }, [
+    isSimRunning,
+    mode,
+    effortLevel,
+    currentRoute.segments,
+    isSpotifyPlaying,
+    currentTrackIndex,
+  ]);
 
   // Walkie-Talkie PTT Start / Stop Handlers
   const handleStartPtt = useCallback(() => {
@@ -264,6 +350,7 @@ export default function App() {
     setIsPttActive(true);
     setActiveSpeakerId('athlete-you');
     playPttOpenChirp(soundEffectsEnabled);
+    walkieTalkieController.pushToTalkOpen();
   }, [isPttActive, soundEffectsEnabled]);
 
   const handleStopPtt = useCallback(() => {
@@ -272,8 +359,8 @@ export default function App() {
     setIsPttLatched(false);
     setActiveSpeakerId(null);
     playPttCloseSquelch(soundEffectsEnabled);
+    walkieTalkieController.pushToTalkRelease();
 
-    // Append user voice transmission to live feed
     const currentSeg =
       currentRoute.segments.find(
         (s) =>
@@ -312,44 +399,18 @@ export default function App() {
     }
   };
 
-  // Global Spacebar Hold-To-Talk Listener
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.code === 'Space' && !e.repeat) {
-        e.preventDefault();
-        handleStartPtt();
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.code === 'Space') {
-        e.preventDefault();
-        if (!isPttLatched) {
-          handleStopPtt();
-        }
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    };
-  }, [handleStartPtt, handleStopPtt, isPttLatched]);
-
   // Send a Quick Preset Voice Callout
   const handleSendQuickCallout = (text: string) => {
     playPttOpenChirp(soundEffectsEnabled);
     setActiveSpeakerId('athlete-you');
     setIsPttActive(true);
+    walkieTalkieController.pushToTalkOpen();
 
     setTimeout(() => {
       setIsPttActive(false);
       setActiveSpeakerId(null);
       playPttCloseSquelch(soundEffectsEnabled);
+      walkieTalkieController.pushToTalkRelease();
       const newCall: VoiceTransmission = {
         id: `vc-${Date.now()}`,
         speakerId: selfAthlete.id,
@@ -434,378 +495,951 @@ export default function App() {
     currentRoute.totalDistanceMiles
   ).toFixed(2);
 
+  const roadColorHex = CONDITION_COLORS[currentRoadSegment.condition].hex;
+
   return (
-    <div className="min-h-screen bg-[#080B10] text-slate-100 flex flex-col">
-      {/* TOP COMMAND HEADER */}
-      <header className="sticky top-0 z-50 bg-[#080B10]/90 backdrop-blur-xl border-b border-white/10 px-4 sm:px-6 py-3">
-        <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-3">
-          {/* Brand Identity */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#D4FF00] text-[#080B10] flex items-center justify-center font-display font-bold text-lg shadow-[0_0_20px_rgba(212,255,0,0.4)]">
-              <Activity className="w-5 h-5 stroke-[2.5]" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-display font-bold text-base sm:text-lg tracking-tight text-white">
-                  PACELOCK
-                </h1>
-                <span className="px-2 py-0.5 rounded-md bg-white/10 text-[10px] font-mono-tech uppercase text-[#D4FF00] font-semibold">
-                  EXPO + SUPABASE + LIVEKIT + SPOTIFY
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">
-                Ride Together or Run Together · Live Pack Telemetry &amp; Voice/Music Sync
-              </p>
-            </div>
-          </div>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <StatusBar style="light" />
 
-          {/* Center Mode Switcher: RUN TOGETHER vs RIDE TOGETHER */}
-          <div className="flex items-center bg-[#111726] p-1 rounded-2xl border border-white/15">
-            <button
-              onClick={() => handleSwitchMode('run')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-display font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                mode === 'run'
-                  ? 'bg-[#D4FF00] text-[#080B10] shadow-[0_0_15px_rgba(212,255,0,0.35)]'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Footprints className="w-4 h-4" />
-              <span>Run Together</span>
-            </button>
-            <button
-              onClick={() => handleSwitchMode('ride')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-display font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                mode === 'ride'
-                  ? 'bg-[#00F0FF] text-[#080B10] shadow-[0_0_15px_rgba(0,240,255,0.35)]'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Bike className="w-4 h-4" />
-              <span>Ride Together</span>
-            </button>
-          </div>
+        {/* TOP COMMAND HEADER */}
+        <View style={styles.header}>
+          <View style={styles.headerTopRow}>
+            {/* Brand Identity */}
+            <View style={styles.brandGroup}>
+              <View style={styles.logoBadge}>
+                <Activity size={20} color="#080B10" strokeWidth={2.5} />
+              </View>
+              <View>
+                <View style={styles.titleLine}>
+                  <Text style={styles.brandTitle}>PACELOCK</Text>
+                  <View style={styles.stackTag}>
+                    <Text style={styles.stackTagText}>
+                      EXPO · SUPABASE · LIVEKIT · SPOTIFY
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.brandSubtitle}>
+                  Ride or Run Together · Live Pack Telemetry &amp; Sync
+                </Text>
+              </View>
+            </View>
 
-          {/* Right Controls: Simulation Play/Pause + View Toggle (Live Cockpit vs Architecture Spec) */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsSimRunning((v) => !v)}
-              className="px-3 py-1.5 rounded-xl bg-white/8 hover:bg-white/15 border border-white/15 text-xs font-mono-tech text-slate-200 flex items-center gap-1.5 cursor-pointer"
-              title="Pause or resume real-time GPS simulation"
-            >
-              {isSimRunning ? (
-                <>
-                  <Pause className="w-3.5 h-3.5 text-[#D4FF00]" />
-                  <span className="hidden md:inline">Sim Live</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="hidden md:inline">Paused</span>
-                </>
-              )}
-            </button>
-
-            <button
-              onClick={() => setAthletes(INITIAL_ATHLETES)}
-              className="p-2 rounded-xl bg-white/8 hover:bg-white/15 border border-white/15 text-slate-300 cursor-pointer"
-              title="Reset pack route progress"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-
-            <div className="flex items-center bg-[#111726] p-1 rounded-xl border border-white/15">
-              <button
-                onClick={() => setActiveView('cockpit')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-mono-tech uppercase font-bold transition-all cursor-pointer ${
-                  activeView === 'cockpit'
-                    ? 'bg-white text-[#080B10]'
-                    : 'text-slate-400 hover:text-white'
-                }`}
+            {/* Right Controls: Sim Play/Pause, Device GPS toggle, Reset */}
+            <View style={styles.headerActions}>
+              <Pressable
+                onPress={() => setIsSimRunning((v) => !v)}
+                style={styles.iconPillBtn}
               >
-                Live App
-              </button>
-              <button
-                onClick={() => setActiveView('architecture')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-mono-tech uppercase font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeView === 'architecture'
-                    ? 'bg-[#D4FF00] text-[#080B10]'
-                    : 'text-slate-400 hover:text-white'
-                }`}
+                {isSimRunning ? (
+                  <Pause size={13} color="#D4FF00" />
+                ) : (
+                  <Play size={13} color="#34D399" />
+                )}
+                <Text style={styles.iconPillBtnText}>
+                  {isSimRunning ? 'Sim Live' : 'Paused'}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => setUseRealDeviceGps((v) => !v)}
+                style={[
+                  styles.iconPillBtn,
+                  useRealDeviceGps && styles.iconPillBtnGpsActive,
+                ]}
               >
-                <Layers className="w-3.5 h-3.5" />
-                <span>Stack &amp; Spec</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
+                <Navigation
+                  size={12}
+                  color={useRealDeviceGps ? '#00F0FF' : '#94A3B8'}
+                />
+                <Text
+                  style={[
+                    styles.iconPillBtnText,
+                    useRealDeviceGps && { color: '#00F0FF' },
+                  ]}
+                >
+                  GPS
+                </Text>
+              </Pressable>
 
-      {/* MAIN WORKSPACE */}
-      <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 py-5 space-y-5">
-        {activeView === 'architecture' ? (
-          <ArchitectureBlueprintView />
-        ) : (
-          <>
-            {/* 1. TOP DOCK: LIVE ACTIVITIES LINEAR PROGRESS BAR WITH EVERYONE'S PFP ON A LINE */}
-            <LiveActivityProgressDock
-              route={currentRoute}
-              athletes={athletes}
-              selectedAthleteId={selectedAthleteId}
-              onSelectAthlete={setSelectedAthleteId}
-              activeSpeakerId={activeSpeakerId}
-              hazardPins={hazardPins}
-              etaFormatted={etaFormatted}
-              arrivalClock={arrivalClock}
-              showIosWidgetPreview={showIosWidgetPreview}
-              onToggleIosWidgetPreview={() => setShowIosWidgetPreview((v) => !v)}
-              effortLevel={effortLevel}
-              onChangeEffort={setEffortLevel}
-            />
+              <Pressable
+                onPress={() => setAthletes(INITIAL_ATHLETES)}
+                style={styles.resetBtn}
+              >
+                <RotateCcw size={14} color="#CBD5E1" />
+              </Pressable>
+            </View>
+          </View>
 
-            {/* 2. PRIMARY TELEMETRY STATS STRIP (Current Speed, % Done, Expected Time, Road Conditions) */}
-            <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-              {/* Stat 1: Current Speed & Pace */}
-              <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-400">
-                    CURRENT SPEED / PACE
-                  </span>
-                  <Gauge className="w-4 h-4 text-[#D4FF00]" />
-                </div>
-                <div className="my-2 flex items-baseline gap-2">
-                  <span className="font-display font-bold text-2xl sm:text-3xl text-white tabular-nums-strict">
-                    {selfAthlete.speedMph.toFixed(1)}
-                  </span>
-                  <span className="text-xs font-mono-tech text-[#D4FF00] font-bold">
-                    MPH
-                  </span>
-                  <span className="text-xs font-mono-tech text-slate-400 ml-auto">
+          {/* Mode Switcher: RUN TOGETHER vs RIDE TOGETHER */}
+          <View style={styles.modeSwitchContainer}>
+            <Pressable
+              onPress={() => handleSwitchMode('run')}
+              style={[
+                styles.modeBtn,
+                mode === 'run' && styles.modeBtnRunActive,
+              ]}
+            >
+              <Footprints
+                size={15}
+                color={mode === 'run' ? '#080B10' : '#94A3B8'}
+              />
+              <Text
+                style={[
+                  styles.modeBtnText,
+                  mode === 'run' && styles.modeBtnTextActive,
+                ]}
+              >
+                Run Together
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => handleSwitchMode('ride')}
+              style={[
+                styles.modeBtn,
+                mode === 'ride' && styles.modeBtnRideActive,
+              ]}
+            >
+              <Bike
+                size={15}
+                color={mode === 'ride' ? '#080B10' : '#94A3B8'}
+              />
+              <Text
+                style={[
+                  styles.modeBtnText,
+                  mode === 'ride' && styles.modeBtnTextActive,
+                ]}
+              >
+                Ride Together
+              </Text>
+            </Pressable>
+          </View>
+
+          {gpsNotice && (
+            <Text style={styles.gpsNoticeText}>{gpsNotice}</Text>
+          )}
+        </View>
+
+        {/* MAIN SCROLLABLE VIEWPORT */}
+        <ScrollView
+          style={styles.mainScroll}
+          contentContainerStyle={styles.mainScrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* TAB 1: COCKPIT */}
+          {activeTab === 'cockpit' && (
+            <View style={styles.tabSection}>
+              {/* 1. LIVE ACTIVITIES LINEAR PROGRESS BAR WITH EVERYONE'S PFP ON A LINE */}
+              <LiveActivityProgressDock
+                route={currentRoute}
+                athletes={athletes}
+                selectedAthleteId={selectedAthleteId}
+                onSelectAthlete={setSelectedAthleteId}
+                activeSpeakerId={activeSpeakerId}
+                hazardPins={hazardPins}
+                etaFormatted={etaFormatted}
+                arrivalClock={arrivalClock}
+                showIosWidgetPreview={showIosWidgetPreview}
+                onToggleIosWidgetPreview={() =>
+                  setShowIosWidgetPreview((v) => !v)
+                }
+                effortLevel={effortLevel}
+                onChangeEffort={setEffortLevel}
+              />
+
+              {/* 2. PRIMARY 2x2 TELEMETRY STATS GRID */}
+              <View style={styles.statsGrid}>
+                {/* Stat 1: Current Speed & Pace */}
+                <View style={styles.statCard}>
+                  <View style={styles.statHeaderRow}>
+                    <Text style={styles.statLabel}>SPEED / PACE</Text>
+                    <Gauge size={15} color="#D4FF00" />
+                  </View>
+                  <View style={styles.statValueRow}>
+                    <Text style={styles.statBigNumber}>
+                      {selfAthlete.speedMph.toFixed(1)}
+                    </Text>
+                    <Text style={[styles.statUnit, { color: '#D4FF00' }]}>
+                      MPH
+                    </Text>
+                  </View>
+                  <Text style={styles.statSubValue}>
                     {mode === 'run'
-                      ? `${formatPaceMinPerMile(selfAthlete.speedMph)} /mi`
+                      ? `${formatPaceMinPerMile(selfAthlete.speedMph)} /mi pace`
                       : `${selfAthlete.powerWatts}W Power`}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-[11px] font-mono-tech text-slate-400 pt-2 border-t border-white/10">
-                  <span className="flex items-center gap-1 text-rose-400">
-                    <Heart className="w-3.5 h-3.5" /> {selfAthlete.heartRate} bpm
-                  </span>
-                  <span className="flex items-center gap-1 text-emerald-400">
-                    <Zap className="w-3.5 h-3.5" /> {selfAthlete.cadence}{' '}
-                    {mode === 'run' ? 'spm' : 'rpm'}
-                  </span>
-                </div>
-              </div>
+                  </Text>
+                  <View style={styles.statFooterRow}>
+                    <View style={styles.statMiniMetric}>
+                      <Heart size={12} color="#FB7185" />
+                      <Text style={[styles.statMiniText, { color: '#FB7185' }]}>
+                        {selfAthlete.heartRate} bpm
+                      </Text>
+                    </View>
+                    <View style={styles.statMiniMetric}>
+                      <Zap size={12} color="#34D399" />
+                      <Text style={[styles.statMiniText, { color: '#34D399' }]}>
+                        {selfAthlete.cadence} {mode === 'run' ? 'spm' : 'rpm'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
 
-              {/* Stat 2: Route % Done & Distance */}
-              <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-400">
-                    COMPLETION (% DONE)
-                  </span>
-                  <Percent className="w-4 h-4 text-[#00F0FF]" />
-                </div>
-                <div className="my-2 flex items-baseline gap-2">
-                  <span className="font-display font-bold text-2xl sm:text-3xl text-white tabular-nums-strict">
-                    {selfAthlete.progress.toFixed(1)}%
-                  </span>
-                  <span className="text-xs font-mono-tech text-[#00F0FF]">
-                    DONE
-                  </span>
-                  <span className="text-xs font-mono-tech text-slate-400 ml-auto">
+                {/* Stat 2: Route % Done & Distance */}
+                <View style={styles.statCard}>
+                  <View style={styles.statHeaderRow}>
+                    <Text style={styles.statLabel}>COMPLETION</Text>
+                    <Percent size={15} color="#00F0FF" />
+                  </View>
+                  <View style={styles.statValueRow}>
+                    <Text style={styles.statBigNumber}>
+                      {selfAthlete.progress.toFixed(1)}%
+                    </Text>
+                    <Text style={[styles.statUnit, { color: '#00F0FF' }]}>
+                      DONE
+                    </Text>
+                  </View>
+                  <Text style={styles.statSubValue}>
                     {completedMiles} / {currentRoute.totalDistanceMiles} mi
-                  </span>
-                </div>
-                <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden mt-1">
-                  <div
-                    style={{ width: `${selfAthlete.progress}%` }}
-                    className="h-full bg-gradient-to-r from-[#00F0FF] to-[#D4FF00]"
-                  />
-                </div>
-              </div>
+                  </Text>
+                  <View style={styles.miniProgressTrack}>
+                    <View
+                      style={[
+                        styles.miniProgressFill,
+                        { width: `${selfAthlete.progress}%` },
+                      ]}
+                    />
+                  </View>
+                </View>
 
-              {/* Stat 3: Expected Time (ETA) */}
-              <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-400">
-                    EXPECTED TIME (ETA)
-                  </span>
-                  <Clock className="w-4 h-4 text-emerald-400" />
-                </div>
-                <div className="my-2 flex items-baseline gap-2">
-                  <span className="font-display font-bold text-2xl sm:text-3xl text-white tabular-nums-strict">
-                    {etaFormatted}
-                  </span>
-                  <span className="text-xs font-mono-tech text-emerald-400">
-                    REMAINING
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-[11px] font-mono-tech text-slate-400 pt-2 border-t border-white/10">
-                  <span>Finish Arrival:</span>
-                  <span className="text-white font-bold">{arrivalClock}</span>
-                </div>
-              </div>
+                {/* Stat 3: Expected Time (ETA) */}
+                <View style={styles.statCard}>
+                  <View style={styles.statHeaderRow}>
+                    <Text style={styles.statLabel}>EXPECTED ETA</Text>
+                    <Clock size={15} color="#34D399" />
+                  </View>
+                  <View style={styles.statValueRow}>
+                    <Text style={styles.statBigNumber}>{etaFormatted}</Text>
+                    <Text style={[styles.statUnit, { color: '#34D399' }]}>
+                      LEFT
+                    </Text>
+                  </View>
+                  <Text style={styles.statSubValue}>
+                    Target {currentRoute.targetSpeedMph} mph
+                  </Text>
+                  <View style={styles.statFooterRow}>
+                    <Text style={styles.statFooterMuted}>Finish Arrival:</Text>
+                    <Text style={styles.statFooterWhite}>{arrivalClock}</Text>
+                  </View>
+                </View>
 
-              {/* Stat 4: Live Google Maps Road Conditions */}
-              <div className="bg-[#0E131D]/95 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-400">
-                    ROAD CONDITIONS (LIVE)
-                  </span>
-                  <ShieldAlert
-                    style={{
-                      color: CONDITION_COLORS[currentRoadSegment.condition].hex,
-                    }}
-                    className="w-4 h-4"
-                  />
-                </div>
-                <div className="my-1.5">
-                  <div
-                    style={{
-                      color: CONDITION_COLORS[currentRoadSegment.condition].hex,
-                    }}
-                    className="font-display font-bold text-sm sm:text-base uppercase truncate"
+                {/* Stat 4: Live Google Maps Road Conditions */}
+                <View style={styles.statCard}>
+                  <View style={styles.statHeaderRow}>
+                    <Text style={styles.statLabel}>ROAD SURFACE</Text>
+                    <ShieldAlert size={15} color={roadColorHex} />
+                  </View>
+                  <Text
+                    style={[
+                      styles.roadConditionHeadline,
+                      { color: roadColorHex },
+                    ]}
+                    numberOfLines={1}
                   >
                     {currentRoadSegment.conditionLabel}
-                  </div>
-                  <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                  </Text>
+                  <Text style={styles.statSubValue} numberOfLines={1}>
                     {currentRoadSegment.name}
-                  </p>
-                </div>
-                <div className="flex items-center justify-between text-[11px] font-mono-tech text-slate-300 pt-2 border-t border-white/10">
-                  <span>Grade: {currentRoadSegment.gradePct}%</span>
-                  <span>Grip: {currentRoadSegment.gripPct}%</span>
-                  <span>Wind: {currentRoadSegment.windSpeedMph}mph</span>
-                </div>
-              </div>
-            </section>
+                  </Text>
+                  <View style={styles.statFooterRow}>
+                    <Text style={styles.statFooterMuted}>
+                      Grade {currentRoadSegment.gradePct}%
+                    </Text>
+                    <Text style={styles.statFooterMuted}>
+                      Grip {currentRoadSegment.gripPct}%
+                    </Text>
+                    <Text style={styles.statFooterMuted}>
+                      {currentRoadSegment.windSpeedMph}mph
+                    </Text>
+                  </View>
+                </View>
+              </View>
 
-            {/* 3. MAIN SPLIT COCKPIT: TACTICAL ROUTE MAP (LEFT) + WALKIE-TALKIE & SPOTIFY SYNC (RIGHT) */}
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-stretch">
-              {/* Left 7 Cols: Interactive Tactical Route Map & Road Conditions */}
-              <div className="xl:col-span-7 flex flex-col">
-                <TacticalRouteMap
-                  route={currentRoute}
-                  athletes={athletes}
-                  selectedAthleteId={selectedAthleteId}
-                  onSelectAthlete={setSelectedAthleteId}
-                  activeSpeakerId={activeSpeakerId}
-                  hazardPins={hazardPins}
-                  onAddHazardPin={handleAddHazardPin}
+              {/* 3. QUICK WALKIE-TALKIE PTT BAR IN COCKPIT */}
+              <View style={styles.quickDeckCard}>
+                <View style={styles.quickDeckHeader}>
+                  <View style={styles.quickDeckTitleRow}>
+                    <Radio size={15} color="#FF4D2A" />
+                    <Text style={styles.quickDeckTitle}>
+                      LIVEKIT WALKIE-TALKIE PTT
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => setActiveTab('ptt')}
+                    style={styles.jumpTabLink}
+                  >
+                    <Text style={styles.jumpTabLinkText}>Full Voice Deck</Text>
+                    <ChevronRight size={13} color="#FF4D2A" />
+                  </Pressable>
+                </View>
+
+                <View style={styles.quickPttRow}>
+                  <Pressable
+                    onPressIn={handleStartPtt}
+                    onPressOut={() => {
+                      if (!isPttLatched) handleStopPtt();
+                    }}
+                    style={[
+                      styles.quickPttButton,
+                      isPttActive && styles.quickPttButtonActive,
+                    ]}
+                  >
+                    {isPttActive ? (
+                      <>
+                        <Waves size={18} color="#FFFFFF" />
+                        <Text style={styles.quickPttButtonText}>
+                          TRANSMITTING TO PACK · RELEASE TO END
+                        </Text>
+                      </>
+                    ) : (
+                      <>
+                        <Mic size={18} color="#FFFFFF" />
+                        <Text style={styles.quickPttButtonText}>
+                          HOLD TO TALK TO ALL 5 PHONES
+                        </Text>
+                      </>
+                    )}
+                  </Pressable>
+                </View>
+                {voiceFeed[0] && (
+                  <Text style={styles.latestVoiceSnippet} numberOfLines={1}>
+                    Latest ({voiceFeed[0].speakerName.split(' ')[0]}): "
+                    {voiceFeed[0].transcript}"
+                  </Text>
+                )}
+              </View>
+
+              {/* 4. QUICK SPOTIFY SYNC BAR IN COCKPIT */}
+              <View style={styles.quickDeckCard}>
+                <View style={styles.quickDeckHeader}>
+                  <View style={styles.quickDeckTitleRow}>
+                    <Music2 size={15} color="#1DB954" />
+                    <Text
+                      style={[styles.quickDeckTitle, { color: '#1DB954' }]}
+                    >
+                      SPOTIFY PACK SYNC · {currentTrack.bpm} BPM LOCKED
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => setActiveTab('spotify')}
+                    style={styles.jumpTabLink}
+                  >
+                    <Text
+                      style={[styles.jumpTabLinkText, { color: '#1DB954' }]}
+                    >
+                      API Translator
+                    </Text>
+                    <ChevronRight size={13} color="#1DB954" />
+                  </Pressable>
+                </View>
+
+                <View style={styles.quickSpotifyRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.quickTrackTitle} numberOfLines={1}>
+                      {currentTrack.title}
+                    </Text>
+                    <Text style={styles.quickTrackArtist} numberOfLines={1}>
+                      {currentTrack.artist} ·{' '}
+                      {activeSpeakerId
+                        ? 'Auto-Ducked 25% (PTT Open)'
+                        : '5/5 Phones Synced'}
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => {
+                      const nextState = !isSpotifyPlaying;
+                      setIsSpotifyPlaying(nextState);
+                      emitCustomSpotifyBroadcast(
+                        nextState ? 'PLAY_TRACK' : 'PAUSE_SYNC',
+                        currentTrackIndex,
+                        trackProgressSec
+                      );
+                    }}
+                    style={styles.quickSpotifyPlayBtn}
+                  >
+                    {isSpotifyPlaying ? (
+                      <Pause size={15} color="#080B10" />
+                    ) : (
+                      <Play size={15} color="#080B10" />
+                    )}
+                    <Text style={styles.quickSpotifyPlayText}>
+                      {isSpotifyPlaying ? 'Pause' : 'Play'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* TAB 2: TACTICAL ROUTE MAP */}
+          {activeTab === 'map' && (
+            <View style={styles.tabSection}>
+              <TacticalRouteMap
+                route={currentRoute}
+                athletes={athletes}
+                selectedAthleteId={selectedAthleteId}
+                onSelectAthlete={setSelectedAthleteId}
+                activeSpeakerId={activeSpeakerId}
+                hazardPins={hazardPins}
+                onAddHazardPin={handleAddHazardPin}
+              />
+              <LiveActivityProgressDock
+                route={currentRoute}
+                athletes={athletes}
+                selectedAthleteId={selectedAthleteId}
+                onSelectAthlete={setSelectedAthleteId}
+                activeSpeakerId={activeSpeakerId}
+                hazardPins={hazardPins}
+                etaFormatted={etaFormatted}
+                arrivalClock={arrivalClock}
+                showIosWidgetPreview={showIosWidgetPreview}
+                onToggleIosWidgetPreview={() =>
+                  setShowIosWidgetPreview((v) => !v)
+                }
+                effortLevel={effortLevel}
+                onChangeEffort={setEffortLevel}
+              />
+            </View>
+          )}
+
+          {/* TAB 3: WALKIE-TALKIE PTT DECK */}
+          {activeTab === 'ptt' && (
+            <View style={styles.tabSection}>
+              <WalkieTalkiePTTDeck
+                isPttActive={isPttActive}
+                isLatched={isPttLatched}
+                onStartPtt={handleStartPtt}
+                onStopPtt={handleStopPtt}
+                onToggleLatch={handleToggleLatch}
+                activeSpeakerId={activeSpeakerId}
+                athletes={athletes}
+                voiceFeed={voiceFeed}
+                onSendQuickCallout={handleSendQuickCallout}
+                onTriggerTeammateCallout={handleTriggerTeammateCallout}
+                soundEffectsEnabled={soundEffectsEnabled}
+                onToggleSoundEffects={() => setSoundEffectsEnabled((v) => !v)}
+              />
+            </View>
+          )}
+
+          {/* TAB 4: SPOTIFY PACK SYNC & CUSTOM BROADCAST TRANSLATOR */}
+          {activeTab === 'spotify' && (
+            <View style={styles.tabSection}>
+              <SpotifySyncDeck
+                tracks={SPOTIFY_PLAYLIST}
+                currentTrackIndex={currentTrackIndex}
+                isPlaying={isSpotifyPlaying}
+                progressSec={trackProgressSec}
+                isVoiceDucked={Boolean(activeSpeakerId)}
+                athletes={athletes}
+                broadcastLogs={broadcastLogs}
+                onTogglePlay={() => {
+                  const nextState = !isSpotifyPlaying;
+                  setIsSpotifyPlaying(nextState);
+                  emitCustomSpotifyBroadcast(
+                    nextState ? 'PLAY_TRACK' : 'PAUSE_SYNC',
+                    currentTrackIndex,
+                    trackProgressSec
+                  );
+                }}
+                onNextTrack={() => {
+                  const nextIdx =
+                    (currentTrackIndex + 1) % SPOTIFY_PLAYLIST.length;
+                  setCurrentTrackIndex(nextIdx);
+                  setTrackProgressSec(0);
+                  playSyncBroadcastPulse(soundEffectsEnabled);
+                  emitCustomSpotifyBroadcast('PLAY_TRACK', nextIdx, 0);
+                }}
+                onPrevTrack={() => {
+                  const prevIdx =
+                    (currentTrackIndex - 1 + SPOTIFY_PLAYLIST.length) %
+                    SPOTIFY_PLAYLIST.length;
+                  setCurrentTrackIndex(prevIdx);
+                  setTrackProgressSec(0);
+                  playSyncBroadcastPulse(soundEffectsEnabled);
+                  emitCustomSpotifyBroadcast('PLAY_TRACK', prevIdx, 0);
+                }}
+                onSeekTrack={(newSec) => {
+                  setTrackProgressSec(newSec);
+                  playSyncBroadcastPulse(soundEffectsEnabled);
+                  emitCustomSpotifyBroadcast(
+                    'SEEK_POSITION',
+                    currentTrackIndex,
+                    newSec
+                  );
+                }}
+                onForceResyncBroadcast={() => {
+                  playSyncBroadcastPulse(soundEffectsEnabled);
+                  emitCustomSpotifyBroadcast(
+                    'BPM_LOCK_RESYNC',
+                    currentTrackIndex,
+                    trackProgressSec
+                  );
+                }}
+                onSelectTrackIndex={(idx) => {
+                  setCurrentTrackIndex(idx);
+                  setTrackProgressSec(0);
+                  playSyncBroadcastPulse(soundEffectsEnabled);
+                  emitCustomSpotifyBroadcast('PLAY_TRACK', idx, 0);
+                }}
+              />
+            </View>
+          )}
+
+          {/* TAB 5: SYSTEM ARCHITECTURE & SUPABASE / LIVEKIT / SPOTIFY SPEC */}
+          {activeTab === 'architecture' && (
+            <View style={styles.tabSection}>
+              <ArchitectureBlueprintView />
+            </View>
+          )}
+        </ScrollView>
+
+        {/* BOTTOM MOBILE TAB NAVIGATION BAR */}
+        <View style={styles.bottomTabBar}>
+          {(
+            [
+              {
+                id: 'cockpit',
+                label: 'Cockpit',
+                icon: Gauge,
+                activeColor: '#D4FF00',
+              },
+              {
+                id: 'map',
+                label: 'Route Map',
+                icon: Map,
+                activeColor: '#00F0FF',
+              },
+              {
+                id: 'ptt',
+                label: 'PTT Voice',
+                icon: Radio,
+                activeColor: '#FF4D2A',
+              },
+              {
+                id: 'spotify',
+                label: 'Spotify Sync',
+                icon: Music2,
+                activeColor: '#1DB954',
+              },
+              {
+                id: 'architecture',
+                label: 'Stack Spec',
+                icon: Layers,
+                activeColor: '#D4FF00',
+              },
+            ] as const
+          ).map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <Pressable
+                key={tab.id}
+                onPress={() => setActiveTab(tab.id)}
+                style={[
+                  styles.bottomTabItem,
+                  isActive && styles.bottomTabItemActive,
+                ]}
+              >
+                <Icon
+                  size={18}
+                  color={isActive ? tab.activeColor : '#64748B'}
                 />
-              </div>
-
-              {/* Right 5 Cols: Walkie-Talkie PTT System + Synchronized Spotify Broadcast Deck */}
-              <div className="xl:col-span-5 flex flex-col gap-5">
-                <WalkieTalkiePTTDeck
-                  isPttActive={isPttActive}
-                  isLatched={isPttLatched}
-                  onStartPtt={handleStartPtt}
-                  onStopPtt={handleStopPtt}
-                  onToggleLatch={handleToggleLatch}
-                  activeSpeakerId={activeSpeakerId}
-                  athletes={athletes}
-                  voiceFeed={voiceFeed}
-                  onSendQuickCallout={handleSendQuickCallout}
-                  onTriggerTeammateCallout={handleTriggerTeammateCallout}
-                  soundEffectsEnabled={soundEffectsEnabled}
-                  onToggleSoundEffects={() => setSoundEffectsEnabled((v) => !v)}
-                />
-
-                <SpotifySyncDeck
-                  tracks={SPOTIFY_PLAYLIST}
-                  currentTrackIndex={currentTrackIndex}
-                  isPlaying={isSpotifyPlaying}
-                  progressSec={trackProgressSec}
-                  isVoiceDucked={Boolean(activeSpeakerId)}
-                  athletes={athletes}
-                  broadcastLogs={broadcastLogs}
-                  onTogglePlay={() => {
-                    const nextState = !isSpotifyPlaying;
-                    setIsSpotifyPlaying(nextState);
-                    emitCustomSpotifyBroadcast(
-                      nextState ? 'PLAY_TRACK' : 'PAUSE_SYNC',
-                      currentTrackIndex,
-                      trackProgressSec
-                    );
-                  }}
-                  onNextTrack={() => {
-                    const nextIdx = (currentTrackIndex + 1) % SPOTIFY_PLAYLIST.length;
-                    setCurrentTrackIndex(nextIdx);
-                    setTrackProgressSec(0);
-                    playSyncBroadcastPulse(soundEffectsEnabled);
-                    emitCustomSpotifyBroadcast('PLAY_TRACK', nextIdx, 0);
-                  }}
-                  onPrevTrack={() => {
-                    const prevIdx =
-                      (currentTrackIndex - 1 + SPOTIFY_PLAYLIST.length) %
-                      SPOTIFY_PLAYLIST.length;
-                    setCurrentTrackIndex(prevIdx);
-                    setTrackProgressSec(0);
-                    playSyncBroadcastPulse(soundEffectsEnabled);
-                    emitCustomSpotifyBroadcast('PLAY_TRACK', prevIdx, 0);
-                  }}
-                  onSeekTrack={(newSec) => {
-                    setTrackProgressSec(newSec);
-                    playSyncBroadcastPulse(soundEffectsEnabled);
-                    emitCustomSpotifyBroadcast(
-                      'SEEK_POSITION',
-                      currentTrackIndex,
-                      newSec
-                    );
-                  }}
-                  onForceResyncBroadcast={() => {
-                    playSyncBroadcastPulse(soundEffectsEnabled);
-                    emitCustomSpotifyBroadcast(
-                      'BPM_LOCK_RESYNC',
-                      currentTrackIndex,
-                      trackProgressSec
-                    );
-                  }}
-                  onSelectTrackIndex={(idx) => {
-                    setCurrentTrackIndex(idx);
-                    setTrackProgressSec(0);
-                    playSyncBroadcastPulse(soundEffectsEnabled);
-                    emitCustomSpotifyBroadcast('PLAY_TRACK', idx, 0);
-                  }}
-                />
-              </div>
-            </div>
-          </>
-        )}
-      </main>
-
-      {/* COMPACT FOOTER STATUS BAR */}
-      <footer className="border-t border-white/10 bg-[#080B10] px-4 sm:px-6 py-3 mt-auto">
-        <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono-tech text-slate-400">
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="flex items-center gap-1.5 text-emerald-400">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Supabase Auth &amp; Postgres Connected (`users`, `playlists`, `friends`)
-            </span>
-            <span className="flex items-center gap-1.5 text-[#FF4D2A]">
-              <Radio className="w-3.5 h-3.5" />
-              LiveKit Cloud PTT Ready (Hold Spacebar or Button)
-            </span>
-            <span className="flex items-center gap-1.5 text-[#1DB954]">
-              <Music2 className="w-3.5 h-3.5" />
-              Custom Broadcast -&gt; Spotify API Translator Active
-            </span>
-          </div>
-          <button
-            onClick={() =>
-              setActiveView((v) => (v === 'cockpit' ? 'architecture' : 'cockpit'))
-            }
-            className="text-[#D4FF00] hover:underline flex items-center gap-1 cursor-pointer"
-          >
-            <Users className="w-3.5 h-3.5" />
-            <span>
-              {activeView === 'cockpit'
-                ? 'Inspect Expo + Supabase + FastAPI Architecture Spec ->'
-                : '<- Back to Live Run/Ride Cockpit'}
-            </span>
-          </button>
-        </div>
-      </footer>
-    </div>
+                <Text
+                  style={[
+                    styles.bottomTabLabel,
+                    isActive && { color: tab.activeColor, fontWeight: '800' },
+                  ]}
+                >
+                  {tab.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#080B10',
+  },
+  header: {
+    backgroundColor: '#080B10',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  brandGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  logoBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: '#D4FF00',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  titleLine: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  brandTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: -0.3,
+  },
+  stackTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  stackTagText: {
+    fontSize: 8.5,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#D4FF00',
+  },
+  brandSubtitle: {
+    fontSize: 11,
+    color: '#94A3B8',
+    marginTop: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  iconPillBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  iconPillBtnGpsActive: {
+    backgroundColor: 'rgba(0, 240, 255, 0.16)',
+    borderColor: 'rgba(0, 240, 255, 0.5)',
+  },
+  iconPillBtnText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#E2E8F0',
+  },
+  resetBtn: {
+    padding: 7,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  modeSwitchContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#111726',
+    padding: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    gap: 4,
+  },
+  modeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  modeBtnRunActive: {
+    backgroundColor: '#D4FF00',
+  },
+  modeBtnRideActive: {
+    backgroundColor: '#00F0FF',
+  },
+  modeBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#94A3B8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  modeBtnTextActive: {
+    color: '#080B10',
+  },
+  gpsNoticeText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#FBBF24',
+  },
+  mainScroll: {
+    flex: 1,
+  },
+  mainScrollContent: {
+    padding: 14,
+    paddingBottom: 28,
+  },
+  tabSection: {
+    gap: 14,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  statCard: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    minWidth: 155,
+    backgroundColor: '#0E131D',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: 12,
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  statHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  statLabel: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+    fontWeight: '700',
+  },
+  statValueRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 5,
+  },
+  statBigNumber: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  statUnit: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+  },
+  statSubValue: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  statFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+  },
+  statMiniMetric: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  statMiniText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '600',
+  },
+  miniProgressTrack: {
+    height: 6,
+    width: '100%',
+    borderRadius: 999,
+    backgroundColor: '#1E293B',
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  miniProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#00F0FF',
+  },
+  statFooterMuted: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+  },
+  statFooterWhite: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  roadConditionHeadline: {
+    fontSize: 13,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    marginTop: 2,
+  },
+  quickDeckCard: {
+    backgroundColor: '#0E131D',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: 12,
+    gap: 8,
+  },
+  quickDeckHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  quickDeckTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  quickDeckTitle: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+    color: '#FF4D2A',
+  },
+  jumpTabLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  jumpTabLinkText: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    fontWeight: '700',
+    color: '#FF4D2A',
+  },
+  quickPttRow: {
+    flexDirection: 'row',
+  },
+  quickPttButton: {
+    flex: 1,
+    paddingVertical: 13,
+    paddingHorizontal: 12,
+    borderRadius: 13,
+    backgroundColor: '#FF4D2A',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  quickPttButtonActive: {
+    backgroundColor: '#FF2E00',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  quickPttButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.4,
+  },
+  latestVoiceSnippet: {
+    fontSize: 11,
+    color: '#CBD5E1',
+    fontStyle: 'italic',
+  },
+  quickSpotifyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    backgroundColor: '#080B10',
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  quickTrackTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  quickTrackArtist: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#94A3B8',
+    marginTop: 2,
+  },
+  quickSpotifyPlayBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#1DB954',
+  },
+  quickSpotifyPlayText: {
+    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontWeight: '800',
+    color: '#080B10',
+    textTransform: 'uppercase',
+  },
+  bottomTabBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    backgroundColor: '#0B0F18',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.12)',
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+  },
+  bottomTabItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    borderRadius: 12,
+    gap: 3,
+  },
+  bottomTabItemActive: {
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+  bottomTabLabel: {
+    fontSize: 10,
+    fontFamily: MONO_FONT,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+});
