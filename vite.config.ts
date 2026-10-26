@@ -2,9 +2,26 @@ import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
+import fs from 'node:fs'
 
-import siteConfiguration from './.figma/make/site.json'
+const rootDir = import.meta.dirname ?? path.resolve()
+const siteConfigPath = path.resolve(rootDir, './.figma/make/site.json')
+let siteConfiguration: FigmaSiteConfiguration = {
+  title: 'Ride or Run Together',
+  description: 'A social endurance sync cockpit connecting runners and cyclists.',
+  language: 'en',
+}
 
+if (fs.existsSync(siteConfigPath)) {
+  try {
+    siteConfiguration = {
+      ...siteConfiguration,
+      ...JSON.parse(fs.readFileSync(siteConfigPath, 'utf-8')),
+    }
+  } catch (e) {
+    console.warn('Failed to parse .figma/make/site.json:', e)
+  }
+}
 
 // Vite config — https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -27,7 +44,7 @@ react(),
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, './src'),
+        '@': path.resolve(rootDir, './src'),
       },
     },
     server: {
