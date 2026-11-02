@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MusicKit clean-room test</title>
+<style>
+  body { font-family: monospace; margin: 24px; background: #111; color: #eee; }
+  textarea { width: 100%; height: 70px; }
+  button { font-size: 15px; margin: 6px 6px 6px 0; padding: 8px 14px; }
+  #log { white-space: pre-wrap; background: #000; padding: 12px; min-height: 200px; }
+</style>
+<script src="https://js-cdn.music.apple.com/musickit/v3/musickit.js" defer></script>
+</head>
+<body>
+<h2>MusicKit clean-room test</h2>
+<p>No Expo, no bundler, no process patch. Plain page, Apple's script, your token.
+Paste the developer token from .env (it never leaves this page), then step through 1, 2, 3.</p>
+<textarea id="token" placeholder="EXPO_PUBLIC_APPLE_MUSICKIT_DEVELOPER_TOKEN"></textarea>
+<br />
+<button id="btn-config">1. Configure + Authorize</button>
+<button id="btn-catalog">2. Play catalog song (XO TOUR Llif3)</button>
+<button id="btn-library">3. Play first library song</button>
+<div id="log"></div>
+<script>
+  const logEl = document.getElementById('log');
+  const log = (...a) => {
+    logEl.textContent += a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ') + '\n';
+  };
+  let music = null;
+  document.addEventListener('musickitloaded', () => log('musickitloaded, version:', MusicKit.version));
+
+  async function reportState(label) {
+    await new Promise(r => setTimeout(r, 2500));
+    log(label, {
+      queueItems: music.queue && music.queue.items ? music.queue.items.length : 'n/a',
+      nowPlaying: music.nowPlayingItem ? music.nowPlayingItem.title : null,
+      playbackState: music.playbackState,
+      isPlaying: music.isPlaying,
+    });
+  }
+
+  document.getElementById('btn-config').onclick = async () => {
+    try {
+      const token = document.getElementById('token').value.trim();
+      if (!token) { log('Paste the token first.'); return; }
+      await MusicKit.configure({
+        developerToken: token,
+        app: { name: 'PACELOCK test', build: '1.0.0' },
+        sourceType: 8,
+      });
+      music = MusicKit.getInstance();
+      music.addEventListener('mediaPlaybackError', e => log('mediaPlaybackError EVENT:', String(e && e.message || e)));
+      log('configured. storefront:', music.storefrontId);
+      await music.authorize();
+      log('authorized:', music.isAuthorized, 'userToken present:', !!music.musicUserToken);
+    } catch (e) { log('CONFIG/AUTH ERROR:', e && e.message || String(e)); }
+  };
+
+  document.getElementById('btn-catalog').onclick = async () => {
+    try {
+      await music.setQueue({ song: '1274598339', startPlaying: true });
+      log('setQueue(catalog) resolved');
+      await reportState('catalog state:');
+    } catch (e) { log('CATALOG ERROR:', e && e.message || String(e)); }
+  };
+
+  document.getElementById('btn-library').onclick = async () => {
+    try {
+      const lib = await music.api.music('/v1/me/library/songs?limit=1');
+      const song = lib.data.data[0];
+      log('library song:', song.id, song.attributes && song.attributes.name);
+      await music.setQueue({ song: song.id, startPlaying: true });
+      log('setQueue(library) resolved');
+      await reportState('library state:');
+    } catch (e) { log('LIBRARY ERROR:', e && e.message || String(e)); }
+  };
+</script>
+</body>
+</html>
