@@ -138,7 +138,24 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
     AuthSession.useAuthRequest(authConfig, SPOTIFY_DISCOVERY);
 
   useEffect(() => {
-    if (authResponse?.type !== 'success' || !authResponse.params.code) {
+    if (!authResponse) return;
+    if (authResponse.type === 'error') {
+      setError(
+        `Spotify sign-in failed: ${
+          authResponse.params?.error_description ??
+          authResponse.error?.message ??
+          'unknown error'
+        }`
+      );
+      return;
+    }
+    if (authResponse.type === 'dismiss' || authResponse.type === 'cancel') {
+      setError(
+        'Spotify sign-in did not complete (the popup closed or was dismissed before Spotify answered).'
+      );
+      return;
+    }
+    if (authResponse.type !== 'success' || !authResponse.params.code) {
       return;
     }
     let cancelled = false;
