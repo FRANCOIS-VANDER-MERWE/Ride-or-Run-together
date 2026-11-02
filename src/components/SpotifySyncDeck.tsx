@@ -168,7 +168,13 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
         );
         if (!cancelled) {
           setSpotifyAuth(state);
-          setError(null);
+          // A resolved exchange that still is not connected must not be
+          // silent; name it so the failure is reportable.
+          setError(
+            state.isConnected
+              ? null
+              : 'Spotify sign-in returned, but the app does not show a connected state. Try again from http://localhost:8081 (not 127.0.0.1).'
+          );
         }
       } catch (err) {
         if (!cancelled) {
