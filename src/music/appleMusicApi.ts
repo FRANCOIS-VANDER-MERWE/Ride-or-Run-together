@@ -103,7 +103,7 @@ export async function lookupAppleSongByIsrc(
   storefront: string = DEFAULT_STOREFRONT
 ): Promise<CanonicalTrack | null> {
   const data = (await appleFetch(
-    `/catalog/${storefront}/songs?filter[isrc]=${encodeURIComponent(isrc)}`
+    `/catalog/${storefront}/songs?filter%5Bisrc%5D=${encodeURIComponent(isrc)}`
   )) as { data?: AppleSongResource[] };
   const song = data?.data?.[0];
   return song ? songToTrack(song) : null;
@@ -119,11 +119,17 @@ export async function findApplePreviewUrl(
   track: CanonicalTrack
 ): Promise<string | null> {
   if (track.previewUrl) return track.previewUrl;
-  try {
-    if (track.isrc) {
+  // Each strategy gets its own try: a rejected ISRC lookup (or any other
+  // single failure) must not take the title search down with it.
+  if (track.isrc) {
+    try {
       const byIsrc = await lookupAppleSongByIsrc(track.isrc);
       if (byIsrc?.previewUrl) return byIsrc.previewUrl;
+    } catch {
+      // Fall through to search.
     }
+  }
+  try {
     const results = await searchAppleCatalog(
       `${track.title} ${track.artist}`,
       5
