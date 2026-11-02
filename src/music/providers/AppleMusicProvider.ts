@@ -50,9 +50,28 @@ declare global {
       configure(config: {
         developerToken: string;
         app: { name: string; build: string };
-      }): Promise<MusicKitInstance>;
+      }): Promise<unknown>;
       getInstance(): MusicKitInstance;
     };
+  }
+}
+
+/**
+ * Expo/Metro define a `process` global in the browser but usually leave
+ * `process.versions` undefined. MusicKit JS checks `null !== process.versions`
+ * (true when it is undefined) and then reads `process.versions.node`, which
+ * throws during library initialization and leaves window.MusicKit present
+ * but half-built, with no configure() function. Forcing versions to null
+ * makes the library take its browser path. (Pattern from the expo-apple-music
+ * project's web loader, which fixed MusicKit JS in Expo web the same way.)
+ */
+function patchProcessForMusicKit(): void {
+  try {
+    if (typeof process !== 'undefined' && process.versions == null) {
+      Object.assign(process, { versions: null });
+    }
+  } catch {
+    // Not fatal; the loader still reports a precise error if init fails.
   }
 }
 
@@ -141,62 +160,94 @@ export class AppleMusicProvider implements MusicProvider {
     if (this.kit) return Promise.resolve(this.kit);
     if (!this.kitLoadPromise) {
       this.kitLoadPromise = (async () => {
-        try {
-          if (!window.MusicKit) {
-            const loaded = new Promise<boolean>((resolve) => {
-              // Documented v3 signal that the library has initialized.
-              document.addEventListener(
-                'musickitloaded',
-                () => resolve(true),
-                { once: true }
-              );
-              const script = document.createElement('script');
-              script.src =
-                'https://js-cdn.music.apple.com/musickit/v3/musickit.js';
-              script.async = true;
-              script.onload = () => resolve(!!window.MusicKit);
-              script.onerror = () => resolve(false);
-              document.head.appendChild(script);
-              // If the page had already finished loading when the script
-              // was injected, MusicKit v3 may sit waiting for this event.
-              setTimeout(() => {
-                if (!window.MusicKit) {
-                  document.dispatchEvent(new Event('DOMContentLoaded'));
-                }
-              }, 300);
-            });
-            const ok = await loaded;
-            const deadline = Date.now() + 10_000;
-            while (!window.MusicKit && Date.now() < deadline) {
-              await new Promise((r) => setTimeout(r, 100));
-            }
-            if (!window.MusicKit) {
-              this.kitError = ok
-                ? 'the MusicKit library loaded but never initialized (window.MusicKit stayed undefined). This can happen when the page is not served from localhost or HTTPS.'
-                : 'the MusicKit script failed to load from js-cdn.music.apple.com (network or blocker).';
-              return null;
-            }
-          }
-          try {
-            this.kit = await window.MusicKit.configure({
-              developerToken: getDeveloperToken(),
-              app: { name: 'PACELOCK', build: '1.0.0' },
-            });
-          } catch (err) {
-            this.kitError = `MusicKit.configure() rejected the developer token: ${
-              err instanceof Error ? err.message : String(err)
-            }. The usual causes are a token signed with a key that does not have MusicKit enabled, a wrong team ID, or an expired token.`;
-            return null;
-          }
-          return this.kit;
-        } catch (err) {
-          this.kitError =
-            err instanceof Error ? err.message : String(err);
-          return null;
+        const kit = await this.loadKitOnce();
+        if (!kit) {
+          // Let a later Connect tap retry instead of caching the failure
+          // for the whole page session.
+          this.kitLoadPromise = null;
         }
+        return kit;
       })();
     }
     return this.kitLoadPromise;
+  }
+
+  private async loadKitOnce(): Promise<MusicKitInstance | null> {
+    patchProcessForMusicKit();
+    try {
+      if (!window.MusicKit?.configure) {
+        const scriptReady = new Promise<boolean>((resolve) => {
+          const onLoaded = () => {
+            cleanup();
+            resolve(true);
+          };
+          const onError = () => {
+            cleanup();
+            resolve(false);
+          };
+          const cleanup = () => {
+            document.removeEventListener('musickitloaded', onLoaded);
+            document.removeEventListener('musickiterror', onError);
+          };
+          document.addEventListener('musickitloaded', onLoaded);
+          document.addEventListener('musickiterror', onError);
+          // The event may already have fired before we subscribed.
+          if (window.MusicKit?.configure) {
+            cleanup();
+            resolve(true);
+            return;
+          }
+          const existing = document.querySelector(
+            'script[src="https://js-cdn.music.apple.com/musickit/v3/musickit.js"]'
+          );
+          if (!existing) {
+            const script = document.createElement('script');
+            script.src =
+              'https://js-cdn.music.apple.com/musickit/v3/musickit.js';
+            script.async = true;
+            script.onerror = onError;
+            document.head.appendChild(script);
+          }
+          setTimeout(() => {
+            cleanup();
+            resolve(!!window.MusicKit?.configure);
+          }, 15_000);
+        });
+        const ready = await scriptReady;
+        // Readiness means the full API is attached, not just the global.
+        const deadline = Date.now() + 5_000;
+        while (!window.MusicKit?.configure && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        if (!window.MusicKit?.configure) {
+          this.kitError = ready
+            ? 'the MusicKit library signaled loaded but its configure() function never appeared. This is the known Expo web initialization failure mode; a full page reload usually clears it.'
+            : 'the MusicKit script failed to load or initialize (musickiterror, a blocked CDN request, or a non-secure page origin). MusicKit requires localhost or HTTPS.';
+          return null;
+        }
+      }
+      try {
+        await window.MusicKit.configure({
+          developerToken: getDeveloperToken(),
+          app: { name: 'PACELOCK', build: '1.0.0' },
+        });
+        this.kit = window.MusicKit.getInstance();
+      } catch (err) {
+        this.kitError = `MusicKit.configure() failed: ${
+          err instanceof Error ? err.message : String(err)
+        }. If the token itself is being rejected, the usual causes are a signing key without MusicKit enabled, a wrong team ID, or an expired token.`;
+        return null;
+      }
+      if (!this.kit) {
+        this.kitError =
+          'MusicKit.configure() completed but getInstance() returned nothing.';
+        return null;
+      }
+      return this.kit;
+    } catch (err) {
+      this.kitError = err instanceof Error ? err.message : String(err);
+      return null;
+    }
   }
 
   // --- auth ---
