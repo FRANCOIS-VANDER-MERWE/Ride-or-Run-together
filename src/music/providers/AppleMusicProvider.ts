@@ -41,6 +41,7 @@ interface MusicKitInstance {
     songs?: string[];
     url?: string;
     startPlaying?: boolean;
+    startTime?: number;
   }): Promise<{ items?: unknown[] } | unknown>;
   play(): Promise<void>;
   pause(): void;
@@ -83,6 +84,7 @@ declare global {
       configure(config: {
         developerToken: string;
         app: { name: string; build: string };
+        sourceType?: number;
       }): Promise<unknown>;
       getInstance(): MusicKitInstance;
     };
@@ -261,11 +263,18 @@ export class AppleMusicProvider implements MusicProvider {
         }
       }
       try {
-        await window.MusicKit.configure({
+        const configured = await window.MusicKit.configure({
           developerToken: getDeveloperToken(),
           app: { name: 'PACELOCK', build: '1.0.0' },
+          // 8 = WEBPLAYER. The working v3 web players set this; without it
+          // the instance is not identified as a playback client.
+          sourceType: 8,
         });
-        this.kit = window.MusicKit.getInstance();
+        const fromConfigure = configured as MusicKitInstance | null;
+        this.kit =
+          fromConfigure && typeof fromConfigure.setQueue === 'function'
+            ? fromConfigure
+            : window.MusicKit.getInstance();
       } catch (err) {
         this.kitError = `MusicKit.configure() failed: ${
           err instanceof Error ? err.message : String(err)
@@ -411,7 +420,11 @@ export class AppleMusicProvider implements MusicProvider {
             | { url: string }
         ): Promise<'playing' | 'queued' | 'empty' | 'error'> => {
           this.lastKitPlaybackError = null;
-          await kit.setQueue({ ...descriptor, startPlaying: true });
+          await kit.setQueue({
+            ...descriptor,
+            startPlaying: true,
+            startTime: positionMs / 1000,
+          });
           return waitForStart(3_500);
         };
 
