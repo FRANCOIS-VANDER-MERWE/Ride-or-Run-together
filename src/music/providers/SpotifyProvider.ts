@@ -156,6 +156,10 @@ export class SpotifyProvider implements MusicProvider {
           await this.fetchProfile();
         } catch {
           this.tokens = null;
+          // Do not cache a failed restore for the whole page session:
+          // one transient profile failure would otherwise poison every
+          // later auth-state read. Allow the next call to retry.
+          this.restorePromise = null;
         }
       })();
     }
