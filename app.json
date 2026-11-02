@@ -39,7 +39,10 @@
       ],
       "expo-sqlite",
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      "expo-audio",
+      "expo-secure-store",
+      "expo-web-browser"
     ]
   }
 }
