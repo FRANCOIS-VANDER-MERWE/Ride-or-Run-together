@@ -35,13 +35,40 @@ interface MusicKitInstance {
   authorize(): Promise<string>;
   unauthorize(): Promise<void>;
   isAuthorized: boolean;
-  setQueue(options: { song?: string; startPlaying?: boolean }): Promise<void>;
+  canPlayCatalogContent?: boolean;
+  setQueue(options: {
+    song?: string;
+    songs?: string[];
+    startPlaying?: boolean;
+  }): Promise<void>;
   play(): Promise<void>;
   pause(): void;
   seekToTime(seconds: number): Promise<void>;
   currentPlaybackTime?: number;
   currentPlaybackDuration?: number;
   isPlaying?: boolean;
+  playbackState?: number;
+  queue?: { items?: unknown[] };
+  addEventListener?: (name: string, cb: (event: unknown) => void) => void;
+  removeEventListener?: (name: string, cb: (event: unknown) => void) => void;
+}
+
+function describeKitEvent(event: unknown): string {
+  if (!event || typeof event !== 'object') return String(event);
+  const e = event as {
+    error?: { message?: string; description?: string };
+    message?: string;
+    description?: string;
+    detail?: { message?: string };
+  };
+  return (
+    e.error?.description ||
+    e.error?.message ||
+    e.detail?.message ||
+    e.message ||
+    e.description ||
+    'unknown MusicKit playback error'
+  );
 }
 
 declare global {
@@ -133,6 +160,7 @@ export class AppleMusicProvider implements MusicProvider {
 
   private currentTrack: CanonicalTrack | null = null;
   private kind: PlaybackKind | null = null;
+  private lastKitPlaybackError: string | null = null;
 
   private stateListeners = new Set<(snap: PlaybackSnapshot) => void>();
   private endedListeners = new Set<() => void>();
@@ -266,6 +294,12 @@ export class AppleMusicProvider implements MusicProvider {
         );
       }
       await kit.authorize();
+      if (kit.canPlayCatalogContent === false) {
+        throw new ProviderError(
+          'not_premium',
+          'This Apple Music account is authorized but cannot play catalog songs. That usually means there is no active Apple Music subscription on the account.'
+        );
+      }
       this.authState = {
         isConnected: true,
         isPremiumOrSubscribed: true,
@@ -342,19 +376,67 @@ export class AppleMusicProvider implements MusicProvider {
     if (this.canUseMusicKit() && appleId) {
       const kit = await this.ensureKit();
       if (kit?.isAuthorized) {
+        this.lastKitPlaybackError = null;
+        const onPlaybackError = (event: unknown) => {
+          this.lastKitPlaybackError = describeKitEvent(event);
+        };
+        kit.addEventListener?.('mediaPlaybackError', onPlaybackError);
         try {
-          await kit.setQueue({ song: appleId, startPlaying: false });
+          await kit.setQueue({ song: appleId, startPlaying: true });
+          const queueLength = kit.queue?.items?.length;
+          if (queueLength === 0) {
+            throw new ProviderError(
+              'track_unavailable',
+              `MusicKit set an empty queue for song ID ${appleId}. The iTunes search ID belongs to the US storefront; if your Apple Music account uses a different storefront, MusicKit cannot queue it.`
+            );
+          }
+          // play() resolving does not mean sound started: MusicKit reports
+          // real failures (DRM, subscription, storefront) through the
+          // mediaPlaybackError event instead. Wait briefly and check.
+          const deadline = Date.now() + 4_000;
+          while (Date.now() < deadline) {
+            if (this.lastKitPlaybackError) break;
+            if (kit.isPlaying || kit.playbackState === 2) break;
+            await new Promise((r) => setTimeout(r, 150));
+          }
+          if (this.lastKitPlaybackError) {
+            throw new ProviderError(
+              'unknown',
+              `Apple Music playback error: ${this.lastKitPlaybackError}`
+            );
+          }
+          if (!kit.isPlaying && kit.playbackState !== 2) {
+            await kit.play();
+            await new Promise((r) => setTimeout(r, 800));
+            if (this.lastKitPlaybackError) {
+              throw new ProviderError(
+                'unknown',
+                `Apple Music playback error: ${this.lastKitPlaybackError}`
+              );
+            }
+            if (!kit.isPlaying && kit.playbackState !== 2) {
+              throw new ProviderError(
+                'unknown',
+                `MusicKit queued the song but playback never started (playbackState=${kit.playbackState ?? 'unknown'}, isPlaying=false, no error event). Check the browser console for a MusicKit message, and confirm the tab is not muted.`
+              );
+            }
+          }
           if (positionMs > 0) {
             await kit.seekToTime(positionMs / 1000);
           }
-          await kit.play();
           this.kind = 'musickit';
           this.emit();
           return 'musickit';
         } catch (err) {
-          if (__DEV__) {
-            console.log('[Apple] MusicKit play failed, trying preview:', err);
-          }
+          if (err instanceof ProviderError) throw err;
+          throw new ProviderError(
+            'unknown',
+            `MusicKit playback failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        } finally {
+          kit.removeEventListener?.('mediaPlaybackError', onPlaybackError);
         }
       }
     }
@@ -408,7 +490,7 @@ export class AppleMusicProvider implements MusicProvider {
     if (this.kind === 'musickit' && this.kit) {
       return {
         trackKey: this.currentTrack?.providerIds.apple ?? null,
-        isPlaying: !!this.kit.isPlaying,
+        isPlaying: !!this.kit.isPlaying || this.kit.playbackState === 2,
         isBuffering: false,
         positionMs: Math.round((this.kit.currentPlaybackTime ?? 0) * 1000),
         durationMs: this.kit.currentPlaybackDuration
