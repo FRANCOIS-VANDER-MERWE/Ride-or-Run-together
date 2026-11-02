@@ -42,7 +42,6 @@ interface MusicKitInstance {
   authorize(): Promise<string>;
   unauthorize(): Promise<void>;
   isAuthorized: boolean;
-  canPlayCatalogContent?: boolean;
   setQueue(options: {
     song?: string;
     songs?: string[];
@@ -312,12 +311,10 @@ export class AppleMusicProvider implements MusicProvider {
         );
       }
       await kit.authorize();
-      if (kit.canPlayCatalogContent === false) {
-        throw new ProviderError(
-          'not_premium',
-          'This Apple Music account is authorized but cannot play catalog songs. That usually means there is no active Apple Music subscription on the account.'
-        );
-      }
+      // Note: MusicKit JS exposes no canPlayCatalogContent (that is an
+      // iOS MusicSubscription concept; the property is undefined here,
+      // verified in the field). Web playback entitlement is inferred
+      // from authorization plus a working library probe instead.
       this.authState = {
         isConnected: true,
         isPremiumOrSubscribed: true,
@@ -450,9 +447,12 @@ export class AppleMusicProvider implements MusicProvider {
               const res = (await kit.api.music(
                 `/v1/catalog/${kit.storefrontId ?? 'us'}/songs/${appleId}`
               )) as { data?: unknown[] };
-              parts.push(
-                `catalog fetch OK (${res?.data?.length ?? '?'} item)`
-              );
+              const count = Array.isArray(res?.data)
+                ? res.data.length
+                : res?.data
+                  ? 'resource present'
+                  : 'no data';
+              parts.push(`catalog fetch OK (${count})`);
             } catch (e) {
               parts.push(
                 `catalog fetch FAILED: ${e instanceof Error ? e.message : String(e)}`
