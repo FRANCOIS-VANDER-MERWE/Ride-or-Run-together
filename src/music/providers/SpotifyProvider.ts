@@ -325,10 +325,26 @@ export class SpotifyProvider implements MusicProvider {
   ): Promise<CanonicalTrack[]> {
     const q = query.trim();
     if (!q) return [];
-    const data = await this.api(
-      `/search?type=track&limit=${limit}&q=${encodeURIComponent(q)}`
-    );
-    const items = (data?.tracks?.items ?? []) as SpotifyTrackItem[];
+    // Spotify Development Mode (Feb 2026 rules) caps /v1/search at 10
+    // results per request; anything larger returns 400 "Invalid limit".
+    // Page with offset in chunks of 10 to honor the requested limit.
+    const PAGE_SIZE = 10;
+    const items: SpotifyTrackItem[] = [];
+    const seen = new Set<string>();
+    while (items.length < limit) {
+      const pageLimit = Math.min(PAGE_SIZE, limit - items.length);
+      const data = await this.api(
+        `/search?type=track&limit=${pageLimit}&offset=${items.length}&q=${encodeURIComponent(q)}`
+      );
+      const page = (data?.tracks?.items ?? []) as SpotifyTrackItem[];
+      for (const t of page) {
+        if (t.uri && !seen.has(t.uri)) {
+          seen.add(t.uri);
+          items.push(t);
+        }
+      }
+      if (page.length < pageLimit) break;
+    }
     return items.map((t) => ({
       isrc: t.external_ids?.isrc ?? '',
       title: t.name,
