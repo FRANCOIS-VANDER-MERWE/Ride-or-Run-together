@@ -932,10 +932,11 @@ export default function App() {
             </View>
           )}
 
-          {/* TAB 4: SPOTIFY PACK SYNC & CUSTOM BROADCAST TRANSLATOR */}
+          {/* TAB 4: GROUP MUSIC SYNC & PROVIDER INTERFACE */}
           {activeTab === 'spotify' && (
             <View style={styles.tabSection}>
               <SpotifySyncDeck
+                mode={mode}
                 tracks={SPOTIFY_PLAYLIST}
                 currentTrackIndex={currentTrackIndex}
                 isPlaying={isSpotifyPlaying}
