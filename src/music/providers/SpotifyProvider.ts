@@ -50,6 +50,18 @@ export function getSpotifyClientId(): string {
 }
 
 export function getSpotifyRedirectUri(): string {
+  // Web: derive from the page origin actually in use, so the popup and
+  // the opener always share an origin (localhost and 127.0.0.1 are
+  // different origins; a mismatch silently breaks the auth hand-back).
+  // Whichever origin is used must be registered exactly in the Spotify
+  // Developer Dashboard.
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.location?.origin === 'string' &&
+    window.location.origin.startsWith('http')
+  ) {
+    return `${window.location.origin}/spotify-auth-callback`;
+  }
   return AuthSession.makeRedirectUri({
     scheme: 'pacelock',
     path: 'spotify-auth-callback',
