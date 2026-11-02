@@ -40,7 +40,7 @@ interface MusicKitInstance {
     song?: string;
     songs?: string[];
     startPlaying?: boolean;
-  }): Promise<void>;
+  }): Promise<{ items?: unknown[] } | unknown>;
   play(): Promise<void>;
   pause(): void;
   seekToTime(seconds: number): Promise<void>;
@@ -49,6 +49,7 @@ interface MusicKitInstance {
   isPlaying?: boolean;
   playbackState?: number;
   queue?: { items?: unknown[] };
+  nowPlayingItem?: unknown;
   addEventListener?: (name: string, cb: (event: unknown) => void) => void;
   removeEventListener?: (name: string, cb: (event: unknown) => void) => void;
 }
@@ -381,43 +382,64 @@ export class AppleMusicProvider implements MusicProvider {
           this.lastKitPlaybackError = describeKitEvent(event);
         };
         kit.addEventListener?.('mediaPlaybackError', onPlaybackError);
-        try {
-          await kit.setQueue({ song: appleId, startPlaying: true });
-          const queueLength = kit.queue?.items?.length;
-          if (queueLength === 0) {
-            throw new ProviderError(
-              'track_unavailable',
-              `MusicKit set an empty queue for song ID ${appleId}. The iTunes search ID belongs to the US storefront; if your Apple Music account uses a different storefront, MusicKit cannot queue it.`
-            );
-          }
-          // play() resolving does not mean sound started: MusicKit reports
-          // real failures (DRM, subscription, storefront) through the
-          // mediaPlaybackError event instead. Wait briefly and check.
-          const deadline = Date.now() + 4_000;
+
+        const waitForStart = async (
+          ms: number
+        ): Promise<'playing' | 'queued' | 'empty' | 'error'> => {
+          const deadline = Date.now() + ms;
           while (Date.now() < deadline) {
-            if (this.lastKitPlaybackError) break;
-            if (kit.isPlaying || kit.playbackState === 2) break;
+            if (this.lastKitPlaybackError) return 'error';
+            if (kit.isPlaying || kit.playbackState === 2) return 'playing';
             await new Promise((r) => setTimeout(r, 150));
           }
-          if (this.lastKitPlaybackError) {
+          if (this.lastKitPlaybackError) return 'error';
+          if (kit.isPlaying || kit.playbackState === 2) return 'playing';
+          const items =
+            kit.queue?.items?.length ?? (kit.nowPlayingItem ? 1 : 0);
+          return items > 0 ? 'queued' : 'empty';
+        };
+
+        const attempt = async (
+          descriptor: { song: string } | { songs: string[] }
+        ): Promise<'playing' | 'queued' | 'empty' | 'error'> => {
+          this.lastKitPlaybackError = null;
+          await kit.setQueue({ ...descriptor, startPlaying: true });
+          return waitForStart(3_500);
+        };
+
+        try {
+          let outcome = await attempt({ song: appleId });
+          if (outcome === 'empty') {
+            // Same call, alternate documented descriptor shape. If this
+            // one queues, the singular form was the problem; if it is
+            // also empty, the problem is in the session, not the call.
+            outcome = await attempt({ songs: [appleId] });
+          }
+          if (outcome === 'error') {
             throw new ProviderError(
               'unknown',
               `Apple Music playback error: ${this.lastKitPlaybackError}`
             );
           }
-          if (!kit.isPlaying && kit.playbackState !== 2) {
+          if (outcome === 'empty') {
+            throw new ProviderError(
+              'track_unavailable',
+              `MusicKit produced an empty queue for song ID ${appleId} with both queue descriptor forms, and reported no playback error. The song is a valid, streamable US catalog track, so this points at the MusicKit session itself (authorization or storefront on the user token), not at the song or the storefront guess in the previous message.`
+            );
+          }
+          if (outcome === 'queued') {
             await kit.play();
-            await new Promise((r) => setTimeout(r, 800));
-            if (this.lastKitPlaybackError) {
+            const second = await waitForStart(2_000);
+            if (second === 'error') {
               throw new ProviderError(
                 'unknown',
                 `Apple Music playback error: ${this.lastKitPlaybackError}`
               );
             }
-            if (!kit.isPlaying && kit.playbackState !== 2) {
+            if (second !== 'playing') {
               throw new ProviderError(
                 'unknown',
-                `MusicKit queued the song but playback never started (playbackState=${kit.playbackState ?? 'unknown'}, isPlaying=false, no error event). Check the browser console for a MusicKit message, and confirm the tab is not muted.`
+                `MusicKit queued the song but playback never started (playbackState=${kit.playbackState ?? 'unknown'}, isPlaying=false, queue items=${kit.queue?.items?.length ?? 'unknown'}, no error event).`
               );
             }
           }
