@@ -11,7 +11,7 @@
 //   stream of its own, so full tracks can never play "inside" this app.
 // - Sound fallback: when there is no active Spotify device, playTrack()
 //   falls back to the track's official preview (Spotify preview_url when
-//   present, otherwise the same recording's iTunes preview, matched by
+//   present, otherwise the same recording's Apple Music catalog preview, matched by
 //   ISRC) through the in-app audio engine, so tapping a song always makes
 //   sound. The UI labels which mode is in use; nothing pretends.
 //
@@ -21,7 +21,7 @@
 import * as AuthSession from 'expo-auth-session';
 
 import { audioEngine } from '../audioEngine';
-import { findPreviewUrl } from '../itunes';
+import { findApplePreviewUrl } from '../appleMusicApi';
 import { storageDelete, storageGet, storageSet } from '../storage';
 import {
   AuthState,
@@ -381,7 +381,7 @@ export class SpotifyProvider implements MusicProvider {
     }
 
     // Fallback: in-app preview so the tap produces real sound.
-    const previewUrl = await findPreviewUrl(track);
+    const previewUrl = await findApplePreviewUrl(track);
     if (!previewUrl) {
       throw new ProviderError(
         'no_active_device',

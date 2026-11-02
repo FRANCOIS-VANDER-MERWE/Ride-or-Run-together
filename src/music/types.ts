@@ -30,7 +30,7 @@ export interface CanonicalTrack {
   /** Always null for now: no live BPM source is wired up. Never guess. */
   bpm: number | null;
   explicit?: boolean;
-  /** Direct preview stream URL (Apple/iTunes), when known. */
+  /** Direct preview stream URL (Apple Music catalog), when known. */
   previewUrl?: string | null;
   /** Canonical Apple Music web URL for the track, when known. */
   appleMusicUrl?: string;

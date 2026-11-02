@@ -1,8 +1,11 @@
 // src/music/providers/AppleMusicProvider.ts
 // Apple Music integration, split honestly by platform:
 //
-// - Search (all platforms): the public iTunes Search API. No account or
-//   token needed, and it returns each song's official preview stream URL.
+// - Search (all platforms): the dedicated Apple Music API
+//   (api.music.apple.com catalog search) with the MusicKit developer
+//   token. Tracks are real catalog resources: the IDs used for queueing
+//   are the catalog playParams IDs, and preview URLs come from the
+//   resource itself.
 // - Playback on iOS / Android: the preview stream, played in-app through
 //   expo-audio. That is real sound from the real recording. Full-length
 //   Apple Music playback on native requires Apple's MusicKit native
@@ -20,7 +23,11 @@
 import { Platform } from 'react-native';
 
 import { audioEngine } from '../audioEngine';
-import { findPreviewUrl, searchItunes } from '../itunes';
+import {
+  findApplePreviewUrl,
+  getAppleDeveloperToken as getDeveloperToken,
+  searchAppleCatalog,
+} from '../appleMusicApi';
 import {
   AuthState,
   CanonicalTrack,
@@ -108,10 +115,6 @@ function patchProcessForMusicKit(): void {
   } catch {
     // Not fatal; the loader still reports a precise error if init fails.
   }
-}
-
-function getDeveloperToken(): string {
-  return process.env.EXPO_PUBLIC_APPLE_MUSICKIT_DEVELOPER_TOKEN ?? '';
 }
 
 /**
@@ -369,8 +372,13 @@ export class AppleMusicProvider implements MusicProvider {
     const q = query.trim();
     if (!q) return [];
     try {
-      return await searchItunes(q, limit);
+      return await searchAppleCatalog(
+        q,
+        limit,
+        this.kit?.storefrontId ?? 'us'
+      );
     } catch (err) {
+      if (err instanceof ProviderError) throw err;
       throw new ProviderError(
         'network',
         err instanceof Error ? err.message : 'Apple catalog search failed.'
@@ -527,7 +535,7 @@ export class AppleMusicProvider implements MusicProvider {
     }
 
     // Everywhere else: the official preview stream, in-app.
-    const previewUrl = await findPreviewUrl(track);
+    const previewUrl = await findApplePreviewUrl(track);
     if (!previewUrl) {
       throw new ProviderError(
         'track_unavailable',
