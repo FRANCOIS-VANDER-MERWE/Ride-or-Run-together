@@ -4,7 +4,14 @@
 // and writes `EXPO_PUBLIC_APPLE_MUSICKIT_DEVELOPER_TOKEN` to `.env`.
 //
 // Usage:
-//   npm run mint:apple-token -- --key /path/to/AuthKey_XXXXXXXXXX.p8 --team YOUR_TEAM_ID [--kid XXXXXXXXXX]
+//   npm run mint:apple-token -- --key /path/to/AuthKey_XXXXXXXXXX.p8 --team YOUR_TEAM_ID [--kid XXXXXXXXXX] [--origin http://localhost:8081]
+//
+// The --origin claim matters: for MusicKit on the Web, Apple locks web
+// playback to the origins listed in the token. A token without an origin
+// claim still works for Apple Music API calls (catalog search returns
+// 200), but MusicKit JS will not queue or play anything with it. Pass
+// every origin the web build is served from (comma separated, or repeat
+// the flag).
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -19,6 +26,13 @@ function parseArgs(argv) {
     else if (arg === '--team' || arg === '-t') out.teamId = argv[++i];
     else if (arg === '--kid' || arg === '-i') out.keyId = argv[++i];
     else if (arg === '--days' || arg === '-d') out.days = Number(argv[++i]);
+    else if (arg === '--origin' || arg === '-o') {
+      out.origins = out.origins || [];
+      for (const o of String(argv[++i]).split(',')) {
+        const trimmed = o.trim();
+        if (trimmed) out.origins.push(trimmed);
+      }
+    }
     else if (!arg.startsWith('-') && arg.endsWith('.p8')) out.keyPath = arg;
   }
   return out;
@@ -97,6 +111,10 @@ const payload = {
   exp: expSec,
 };
 
+if (args.origins && args.origins.length > 0) {
+  payload.origin = args.origins;
+}
+
 const signingInput = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(payload))}`;
 
 // ES256 JWT requires IEEE P1363 signature encoding (64-byte r||s), not ASN.1 DER
@@ -135,5 +153,13 @@ console.log(`   • Key file : ${keyPath}`);
 console.log(`   • Key ID   : ${keyId}`);
 console.log(`   • Team ID  : ${teamId}`);
 console.log(`   • Expires  : ${new Date(expSec * 1000).toISOString()} (${validityDays} days)`);
+if (payload.origin) {
+  console.log(`   • Origins  : ${payload.origin.join(', ')}`);
+} else {
+  console.log('   • WARNING  : no --origin claim. This token will work for Apple Music');
+  console.log('                API calls, but MusicKit JS web playback will NOT queue');
+  console.log('                songs with it. Re-run with --origin http://localhost:8081');
+  console.log('                (plus your real domain when deployed).');
+}
 console.log(`   • Saved to : ${envPath} (EXPO_PUBLIC_APPLE_MUSICKIT_DEVELOPER_TOKEN)\n`);
 
