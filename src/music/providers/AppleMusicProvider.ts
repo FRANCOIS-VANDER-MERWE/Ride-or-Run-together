@@ -98,29 +98,50 @@ declare global {
 }
 
 /**
- * Expo/Metro define a `process` global in the browser but usually leave
- * `process.versions` undefined. MusicKit JS checks `null !== process.versions`
- * (true when it is undefined) and then reads `process.versions.node`, which
- * throws during library initialization and leaves window.MusicKit present
- * but half-built, with no configure() function. Forcing versions to null
- * makes the library take its browser path. (Pattern from the expo-apple-music
- * project's web loader, which fixed MusicKit JS in Expo web the same way.)
+ * MusicKit JS environment handling under Expo web.
+ *
+ * Expo/Metro define a `process` global in the browser. MusicKit JS was
+ * built for plain web pages, which have no `process` at all. With the
+ * Expo global present, MusicKit loads (after the versions workaround),
+ * authorizes, and serves API reads, but its playback path silently
+ * never queues anything: empty queue, no error event, for catalog and
+ * library songs alike. A clean-room page at the same origin with the
+ * same token and no `process` global plays both immediately (verified
+ * in the field, Nov 2 2026). Hiding the global only around setQueue()
+ * does NOT help, so the environment is captured while the library
+ * loads, configures, or authorizes.
+ *
+ * Strategy: remove `process` from the global scope before the MusicKit
+ * script is injected, keep it hidden through configure() and the first
+ * authorize(), then restore it so the rest of the app keeps its env.
  */
-function patchProcessForMusicKit(): void {
+let savedProcess: unknown;
+let processHidden = false;
+
+function hideProcessGlobal(): void {
   try {
-    if (typeof process !== 'undefined' && process.versions == null) {
-      Object.assign(process, { versions: null });
+    const g = globalThis as { process?: unknown };
+    if (!processHidden && typeof g.process !== 'undefined') {
+      savedProcess = g.process;
+      g.process = undefined;
+      processHidden = true;
     }
   } catch {
-    // Not fatal; the loader still reports a precise error if init fails.
+    // Not fatal; loadKit still reports precise errors.
   }
 }
 
-/**
- * Decode (not verify) a JWT's claims, to catch the common token problems
- * client-side: not a JWT at all, missing team ID, or expired. Returns a
- * user-readable problem string, or null when the token looks usable.
- */
+function restoreProcessGlobal(): void {
+  try {
+    if (processHidden) {
+      (globalThis as { process?: unknown }).process = savedProcess;
+      processHidden = false;
+    }
+  } catch {
+    // Ignore: worst case the page keeps running without the shim.
+  }
+}
+
 function developerTokenProblem(token: string): string | null {
   const parts = token.split('.');
   if (parts.length !== 3) {
@@ -211,7 +232,7 @@ export class AppleMusicProvider implements MusicProvider {
   }
 
   private async loadKitOnce(): Promise<MusicKitInstance | null> {
-    patchProcessForMusicKit();
+    hideProcessGlobal();
     try {
       if (!window.MusicKit?.configure) {
         const scriptReady = new Promise<boolean>((resolve) => {
@@ -261,6 +282,7 @@ export class AppleMusicProvider implements MusicProvider {
           this.kitError = ready
             ? 'the MusicKit library signaled loaded but its configure() function never appeared. This is the known Expo web initialization failure mode; a full page reload usually clears it.'
             : 'the MusicKit script failed to load or initialize (musickiterror, a blocked CDN request, or a non-secure page origin). MusicKit requires localhost or HTTPS.';
+          restoreProcessGlobal();
           return null;
         }
       }
@@ -281,16 +303,19 @@ export class AppleMusicProvider implements MusicProvider {
         this.kitError = `MusicKit.configure() failed: ${
           err instanceof Error ? err.message : String(err)
         }. If the token itself is being rejected, the usual causes are a signing key without MusicKit enabled, a wrong team ID, or an expired token.`;
+        restoreProcessGlobal();
         return null;
       }
       if (!this.kit) {
         this.kitError =
           'MusicKit.configure() completed but getInstance() returned nothing.';
+        restoreProcessGlobal();
         return null;
       }
       return this.kit;
     } catch (err) {
       this.kitError = err instanceof Error ? err.message : String(err);
+      restoreProcessGlobal();
       return null;
     }
   }
@@ -311,6 +336,10 @@ export class AppleMusicProvider implements MusicProvider {
         );
       }
       await kit.authorize();
+      // Load, configure, and authorize all happened with no `process`
+      // global in scope (see hideProcessGlobal). Restore it now so the
+      // rest of the app gets its Expo env back.
+      restoreProcessGlobal();
       // Note: MusicKit JS exposes no canPlayCatalogContent (that is an
       // iOS MusicSubscription concept; the property is undefined here,
       // verified in the field). Web playback entitlement is inferred
@@ -538,6 +567,7 @@ export class AppleMusicProvider implements MusicProvider {
     }
 
     // Everywhere else: the official preview stream, in-app.
+    restoreProcessGlobal();
     const previewUrl = await findApplePreviewUrl(track);
     if (!previewUrl) {
       throw new ProviderError(
