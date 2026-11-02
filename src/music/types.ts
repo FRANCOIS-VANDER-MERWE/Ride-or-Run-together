@@ -32,6 +32,10 @@ export interface CanonicalTrack {
   explicit?: boolean;
   /** Direct preview stream URL (Apple/iTunes), when known. */
   previewUrl?: string | null;
+  /** Canonical Apple Music web URL for the track, when known. */
+  appleMusicUrl?: string;
+  /** False when the source says the track cannot be streamed (purchase only). */
+  streamable?: boolean;
   /** Per-service IDs: spotify = track URI, apple = catalog song ID. */
   providerIds: Partial<Record<ProviderId, string>>;
 }

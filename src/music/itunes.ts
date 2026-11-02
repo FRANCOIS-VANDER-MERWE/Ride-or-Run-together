@@ -21,6 +21,8 @@ interface ItunesSong {
   isrc?: string;
   trackExplicitness?: string;
   kind?: string;
+  trackViewUrl?: string;
+  isStreamable?: boolean;
 }
 
 async function itunesJson(url: string): Promise<{ results?: ItunesSong[] }> {
@@ -45,6 +47,8 @@ export function itunesSongToTrack(song: ItunesSong): CanonicalTrack | null {
     bpm: null,
     explicit: song.trackExplicitness === 'explicit',
     previewUrl: song.previewUrl ?? null,
+    appleMusicUrl: song.trackViewUrl,
+    streamable: song.isStreamable,
     providerIds: { apple: String(song.trackId) },
   };
 }

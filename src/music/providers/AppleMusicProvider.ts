@@ -39,6 +39,7 @@ interface MusicKitInstance {
   setQueue(options: {
     song?: string;
     songs?: string[];
+    url?: string;
     startPlaying?: boolean;
   }): Promise<{ items?: unknown[] } | unknown>;
   play(): Promise<void>;
@@ -50,6 +51,10 @@ interface MusicKitInstance {
   playbackState?: number;
   queue?: { items?: unknown[] };
   nowPlayingItem?: unknown;
+  storefrontId?: string;
+  api?: {
+    music(href: string): Promise<unknown>;
+  };
   addEventListener?: (name: string, cb: (event: unknown) => void) => void;
   removeEventListener?: (name: string, cb: (event: unknown) => void) => void;
 }
@@ -400,12 +405,53 @@ export class AppleMusicProvider implements MusicProvider {
         };
 
         const attempt = async (
-          descriptor: { song: string } | { songs: string[] }
+          descriptor:
+            | { song: string }
+            | { songs: string[] }
+            | { url: string }
         ): Promise<'playing' | 'queued' | 'empty' | 'error'> => {
           this.lastKitPlaybackError = null;
           await kit.setQueue({ ...descriptor, startPlaying: true });
           return waitForStart(3_500);
         };
+
+        // Session diagnostics through MusicKit's own API: can this session
+        // even see the song in the catalog, and can it read the user
+        // library (a working proxy for a playback-capable user token)?
+        // The summary rides along in any failure message below.
+        let diag = 'session check unavailable';
+        try {
+          const parts: string[] = [
+            `storefront=${kit.storefrontId ?? 'unknown'}`,
+          ];
+          if (kit.api?.music) {
+            try {
+              const res = (await kit.api.music(
+                `/v1/catalog/${kit.storefrontId ?? 'us'}/songs/${appleId}`
+              )) as { data?: unknown[] };
+              parts.push(
+                `catalog fetch OK (${res?.data?.length ?? '?'} item)`
+              );
+            } catch (e) {
+              parts.push(
+                `catalog fetch FAILED: ${e instanceof Error ? e.message : String(e)}`
+              );
+            }
+            try {
+              await kit.api.music('/v1/me/library/songs?limit=1');
+              parts.push('library fetch OK (user token works)');
+            } catch (e) {
+              parts.push(
+                `library fetch FAILED: ${e instanceof Error ? e.message : String(e)}`
+              );
+            }
+          } else {
+            parts.push('instance exposes no api.music');
+          }
+          diag = parts.join(' · ');
+        } catch {
+          // Diagnostics must never block the playback attempt itself.
+        }
 
         try {
           let outcome = await attempt({ song: appleId });
@@ -414,6 +460,10 @@ export class AppleMusicProvider implements MusicProvider {
             // one queues, the singular form was the problem; if it is
             // also empty, the problem is in the session, not the call.
             outcome = await attempt({ songs: [appleId] });
+          }
+          if (outcome === 'empty' && track.appleMusicUrl) {
+            // Third form: queue by the song's canonical web URL.
+            outcome = await attempt({ url: track.appleMusicUrl });
           }
           if (outcome === 'error') {
             throw new ProviderError(
@@ -424,7 +474,7 @@ export class AppleMusicProvider implements MusicProvider {
           if (outcome === 'empty') {
             throw new ProviderError(
               'track_unavailable',
-              `MusicKit produced an empty queue for song ID ${appleId} with both queue descriptor forms, and reported no playback error. The song is a valid, streamable US catalog track, so this points at the MusicKit session itself (authorization or storefront on the user token), not at the song or the storefront guess in the previous message.`
+              `MusicKit produced an empty queue for song ID ${appleId} with every queue descriptor form and reported no playback error. Session check: ${diag}.`
             );
           }
           if (outcome === 'queued') {
