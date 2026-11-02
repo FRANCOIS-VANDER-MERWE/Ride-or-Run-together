@@ -444,11 +444,14 @@ export class AppleMusicProvider implements MusicProvider {
           ];
           if (kit.api?.music) {
             try {
+              // MusicKit JS v3 wraps responses: {request, response, data}
+              // where data is the response BODY, so resources live at
+              // body.data. (Field-verified; earlier probes misread this.)
               const res = (await kit.api.music(
                 `/v1/catalog/${kit.storefrontId ?? 'us'}/songs/${appleId}`
-              )) as { data?: unknown[] };
-              const count = Array.isArray(res?.data)
-                ? res.data.length
+              )) as { data?: { data?: unknown[] } };
+              const count = Array.isArray(res?.data?.data)
+                ? `${res.data.data.length} item`
                 : res?.data
                   ? 'resource present'
                   : 'no data';
