@@ -252,7 +252,12 @@ export class SpotifyProvider implements MusicProvider {
   // --- Web API plumbing ---
 
   private async ensureAccessToken(): Promise<string> {
-    await this.restore();
+    // Only restore when tokens are not already in memory. restore() sets
+    // this.tokens BEFORE its own profile fetch, and that fetch comes back
+    // through here: awaiting restore() unconditionally deadlocked the
+    // provider on its own in-flight restore promise whenever stored
+    // tokens existed (sign-in worked once, then never after a reload).
+    if (!this.tokens) await this.restore();
     if (!this.tokens) {
       throw new ProviderError(
         'not_connected',
