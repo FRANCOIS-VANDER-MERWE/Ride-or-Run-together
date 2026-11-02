@@ -60,6 +60,34 @@ function getDeveloperToken(): string {
   return process.env.EXPO_PUBLIC_APPLE_MUSICKIT_DEVELOPER_TOKEN ?? '';
 }
 
+/**
+ * Decode (not verify) a JWT's claims, to catch the common token problems
+ * client-side: not a JWT at all, missing team ID, or expired. Returns a
+ * user-readable problem string, or null when the token looks usable.
+ */
+function developerTokenProblem(token: string): string | null {
+  const parts = token.split('.');
+  if (parts.length !== 3) {
+    return 'the configured developer token is not a JWT (it should have 3 dot-separated parts). Re-mint it with: npm run mint:apple-token';
+  }
+  try {
+    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const claims = JSON.parse(atob(payload)) as {
+      iss?: string;
+      exp?: number;
+    };
+    if (!claims.iss) {
+      return 'the developer token has no iss (team ID) claim. Re-mint it with your Apple Developer Team ID.';
+    }
+    if (claims.exp && claims.exp * 1000 < Date.now()) {
+      return `the developer token expired on ${new Date(claims.exp * 1000).toISOString()}. Re-mint it with: npm run mint:apple-token`;
+    }
+    return null;
+  } catch {
+    return 'the developer token payload could not be decoded. Re-mint it with: npm run mint:apple-token';
+  }
+}
+
 export class AppleMusicProvider implements MusicProvider {
   public readonly id = 'apple' as const;
   public readonly capabilities: ProviderCapabilities = {
@@ -82,6 +110,7 @@ export class AppleMusicProvider implements MusicProvider {
 
   private kit: MusicKitInstance | null = null;
   private kitLoadPromise: Promise<MusicKitInstance | null> | null = null;
+  private kitError: string | null = null;
 
   private currentTrack: CanonicalTrack | null = null;
   private kind: PlaybackKind | null = null;
@@ -114,32 +143,55 @@ export class AppleMusicProvider implements MusicProvider {
       this.kitLoadPromise = (async () => {
         try {
           if (!window.MusicKit) {
-            await new Promise<void>((resolve, reject) => {
+            const loaded = new Promise<boolean>((resolve) => {
+              // Documented v3 signal that the library has initialized.
+              document.addEventListener(
+                'musickitloaded',
+                () => resolve(true),
+                { once: true }
+              );
               const script = document.createElement('script');
               script.src =
                 'https://js-cdn.music.apple.com/musickit/v3/musickit.js';
               script.async = true;
-              script.onload = () => resolve();
-              script.onerror = () =>
-                reject(new Error('MusicKit JS failed to load'));
+              script.onload = () => resolve(!!window.MusicKit);
+              script.onerror = () => resolve(false);
               document.head.appendChild(script);
+              // If the page had already finished loading when the script
+              // was injected, MusicKit v3 may sit waiting for this event.
+              setTimeout(() => {
+                if (!window.MusicKit) {
+                  document.dispatchEvent(new Event('DOMContentLoaded'));
+                }
+              }, 300);
             });
-            // MusicKit v3 configures from a DOMContentLoaded listener when
-            // loaded late; dispatching it after a dynamic load is the
-            // documented workaround.
-            document.dispatchEvent(new Event('DOMContentLoaded'));
+            const ok = await loaded;
+            const deadline = Date.now() + 10_000;
+            while (!window.MusicKit && Date.now() < deadline) {
+              await new Promise((r) => setTimeout(r, 100));
+            }
+            if (!window.MusicKit) {
+              this.kitError = ok
+                ? 'the MusicKit library loaded but never initialized (window.MusicKit stayed undefined). This can happen when the page is not served from localhost or HTTPS.'
+                : 'the MusicKit script failed to load from js-cdn.music.apple.com (network or blocker).';
+              return null;
+            }
           }
-          const deadline = Date.now() + 10_000;
-          while (!window.MusicKit && Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, 100));
+          try {
+            this.kit = await window.MusicKit.configure({
+              developerToken: getDeveloperToken(),
+              app: { name: 'PACELOCK', build: '1.0.0' },
+            });
+          } catch (err) {
+            this.kitError = `MusicKit.configure() rejected the developer token: ${
+              err instanceof Error ? err.message : String(err)
+            }. The usual causes are a token signed with a key that does not have MusicKit enabled, a wrong team ID, or an expired token.`;
+            return null;
           }
-          if (!window.MusicKit) return null;
-          this.kit = await window.MusicKit.configure({
-            developerToken: getDeveloperToken(),
-            app: { name: 'PACELOCK', build: '1.0.0' },
-          });
           return this.kit;
-        } catch {
+        } catch (err) {
+          this.kitError =
+            err instanceof Error ? err.message : String(err);
           return null;
         }
       })();
@@ -151,11 +203,15 @@ export class AppleMusicProvider implements MusicProvider {
 
   public async connect(): Promise<AuthState> {
     if (this.canUseMusicKit()) {
+      const problem = developerTokenProblem(getDeveloperToken());
+      if (problem) {
+        throw new ProviderError('not_configured', `Apple Music: ${problem}`);
+      }
       const kit = await this.ensureKit();
       if (!kit) {
         throw new ProviderError(
           'unknown',
-          'MusicKit could not load. Check the developer token and try again.'
+          `MusicKit could not load. ${this.kitError ?? 'No detail was reported by the library.'}`
         );
       }
       await kit.authorize();
