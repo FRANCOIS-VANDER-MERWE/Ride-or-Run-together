@@ -6,6 +6,8 @@ import {
   ScrollView,
   StyleSheet,
   Platform,
+  BackHandler,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -18,7 +20,7 @@ import {
   Percent,
   Radio,
   Music2,
-  Layers,
+  Users,
   Play,
   Pause,
   RotateCcw,
@@ -53,6 +55,7 @@ import TacticalRouteMap from './components/TacticalRouteMap';
 import WalkieTalkiePTTDeck from './components/WalkieTalkiePTTDeck';
 import SpotifySyncDeck from './components/SpotifySyncDeck';
 import ArchitectureBlueprintView from './components/ArchitectureBlueprintModal';
+import SessionsScreen from './components/SessionsScreen';
 import {
   playPttCloseSquelch,
   playPttOpenChirp,
@@ -65,7 +68,7 @@ import {
 import { walkieTalkieController } from './services/liveKitVoiceService';
 import { startDeviceGpsTracking } from './services/locationTelemetryService';
 
-export type BottomTabId = 'cockpit' | 'map' | 'ptt' | 'spotify' | 'architecture';
+export type BottomTabId = 'cockpit' | 'map' | 'ptt' | 'spotify' | 'sessions' | 'architecture';
 
 const MONO_FONT = Platform.select({
   ios: 'Menlo',
@@ -118,6 +121,14 @@ export default function App() {
   // Core Mode: 'run' ("Run Together") vs 'ride' ("Ride Together")
   const [mode, setMode] = useState<ActivityMode>('run');
   const [activeTab, setActiveTab] = useState<BottomTabId>('cockpit');
+  useEffect(() => {
+    if (activeTab !== 'architecture') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setActiveTab('sessions');
+      return true;
+    });
+    return () => subscription.remove();
+  }, [activeTab]);
   const [isSimRunning, setIsSimRunning] = useState(true);
   const [useRealDeviceGps, setUseRealDeviceGps] = useState(false);
   const [gpsNotice, setGpsNotice] = useState<string | null>(null);
@@ -499,11 +510,11 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
         <StatusBar style="light" />
 
         {/* TOP COMMAND HEADER */}
-        <View style={styles.header}>
+        {activeTab !== 'sessions' && <View style={styles.header}>
           <View style={styles.headerTopRow}>
             {/* Brand Identity */}
             <View style={styles.brandGroup}>
@@ -619,11 +630,11 @@ export default function App() {
           {gpsNotice && (
             <Text style={styles.gpsNoticeText}>{gpsNotice}</Text>
           )}
-        </View>
+        </View>}
 
         {/* MAIN SCROLLABLE VIEWPORT */}
         <ScrollView
-          style={styles.mainScroll}
+          style={[styles.mainScroll, activeTab === 'sessions' && styles.hidden]}
           contentContainerStyle={styles.mainScrollContent}
           showsVerticalScrollIndicator={false}
         >
@@ -999,10 +1010,14 @@ export default function App() {
           {/* TAB 5: SYSTEM ARCHITECTURE & SUPABASE / LIVEKIT / SPOTIFY SPEC */}
           {activeTab === 'architecture' && (
             <View style={styles.tabSection}>
+              <Pressable accessibilityRole="button" onPress={() => setActiveTab('sessions')} style={styles.backToSessions}>
+                <Text style={styles.backToSessionsText}>‹ Back to Sessions</Text>
+              </Pressable>
               <ArchitectureBlueprintView />
             </View>
           )}
         </ScrollView>
+        <SessionsScreen active={activeTab === 'sessions'} onOpenStackSpec={() => setActiveTab('architecture')} />
 
         {/* BOTTOM MOBILE TAB NAVIGATION BAR */}
         <View style={styles.bottomTabBar}>
@@ -1033,19 +1048,23 @@ export default function App() {
                 activeColor: '#1DB954',
               },
               {
-                id: 'architecture',
-                label: 'Stack Spec',
-                icon: Layers,
+                id: 'sessions',
+                label: 'Sessions',
+                icon: Users,
                 activeColor: '#D4FF00',
               },
             ] as const
           ).map((tab) => {
             const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
+            const isActive = activeTab === tab.id || (tab.id === 'sessions' && activeTab === 'architecture');
             return (
               <Pressable
                 key={tab.id}
-                onPress={() => setActiveTab(tab.id)}
+                accessibilityRole="tab"
+                accessibilityLabel={tab.label}
+                accessibilityState={{ selected: isActive }}
+                aria-selected={isActive}
+                onPress={() => { Keyboard.dismiss(); setActiveTab(tab.id); }}
                 style={[
                   styles.bottomTabItem,
                   isActive && styles.bottomTabItemActive,
@@ -1073,6 +1092,9 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  hidden: { display: 'none' },
+  backToSessions: { minHeight: 44, justifyContent: 'center' },
+  backToSessionsText: { color: '#94A3B8', fontSize: 14 },
   safeArea: {
     flex: 1,
     backgroundColor: '#080B10',
@@ -1427,6 +1449,7 @@ const styles = StyleSheet.create({
   },
   bottomTabItem: {
     flex: 1,
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 6,
