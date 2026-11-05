@@ -12,11 +12,13 @@ export type ProviderId = 'spotify' | 'apple';
  * How a track is actually being heard:
  * - 'remote':   full track, played by the user's own Spotify app/device
  *               through the Spotify Web API (Spotify provider only).
+ * - 'appremote': full track, played by the Spotify app on this phone
+ *               through Spotify App Remote (Spotify provider, native only).
  * - 'preview':  official 30 second preview stream, played in-app through
  *               expo-audio. This is the fallback that always produces sound.
  * - 'musickit': full track through MusicKit JS (Apple provider, web only).
  */
-export type PlaybackKind = 'remote' | 'preview' | 'musickit';
+export type PlaybackKind = 'remote' | 'appremote' | 'preview' | 'musickit';
 
 /** A recording, independent of any one service. */
 export interface CanonicalTrack {

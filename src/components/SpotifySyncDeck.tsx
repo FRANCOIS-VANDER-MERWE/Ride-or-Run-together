@@ -96,6 +96,7 @@ function formatTime(ms: number | null | undefined): string {
 
 const KIND_LABELS: Record<PlaybackKind, string> = {
   remote: 'Full track · playing on your Spotify device',
+  appremote: 'Full track · Spotify app on this phone',
   preview: 'Preview · 30s, playing in this app',
   musickit: 'Full track · Apple Music (web)',
 };

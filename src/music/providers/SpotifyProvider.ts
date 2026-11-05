@@ -22,6 +22,11 @@ import * as AuthSession from 'expo-auth-session';
 
 import { audioEngine } from '../audioEngine';
 import { findApplePreviewUrl } from '../appleMusicApi';
+import {
+  isAppRemoteAvailable,
+  spotifyAppRemote,
+  type AppRemotePlayerState,
+} from '../spotifyAppRemote';
 import { storageDelete, storageGet, storageSet } from '../storage';
 import {
   AuthState,
@@ -43,6 +48,11 @@ export const SPOTIFY_SCOPES = [
   'user-read-email',
   'user-read-playback-state',
   'user-modify-playback-state',
+  // Lets the native App Remote transport control the Spotify app on
+  // this phone (see spotifyAppRemote.ts). Tokens granted before this
+  // scope was added do not carry it: disconnect and reconnect Spotify
+  // once after upgrading.
+  'app-remote-control',
 ];
 
 export function getSpotifyClientId(): string {
@@ -112,7 +122,7 @@ export class SpotifyProvider implements MusicProvider {
     requiresPremium: true,
     requiresExternalApp: true,
     playbackNote:
-      'Full songs play on your Spotify app (Premium). With no Spotify device active, a 30s preview plays here instead.',
+      'Full songs play in your Spotify app (Premium). On this phone PACELOCK can drive that app directly; when no Spotify playback is available, a 30s preview plays here instead.',
   };
 
   private tokens: StoredTokens | null = null;
@@ -126,6 +136,8 @@ export class SpotifyProvider implements MusicProvider {
 
   private currentTrack: CanonicalTrack | null = null;
   private kind: PlaybackKind | null = null;
+  private appRemoteWired = false;
+  private appRemoteState: AppRemotePlayerState | null = null;
   private remoteSnapshot: PlaybackSnapshot | null = null;
   private remoteSnapshotAtMs = 0;
 
@@ -229,6 +241,7 @@ export class SpotifyProvider implements MusicProvider {
 
   public async disconnect(): Promise<void> {
     await this.pause().catch(() => {});
+    await spotifyAppRemote.disconnect();
     this.tokens = null;
     this.authState = {
       isConnected: false,
@@ -383,7 +396,30 @@ export class SpotifyProvider implements MusicProvider {
     }
     this.currentTrack = track;
 
-    // Preferred: full track on the user's active Spotify device.
+    // Preferred on native: App Remote to the Spotify app on this phone.
+    // It does not depend on a Connect device being active elsewhere,
+    // and it can wake the Spotify app. Any failure (module missing in
+    // this build, Spotify not installed, connection refused) falls
+    // through to the Web API device path and then the preview.
+    if (isAppRemoteAvailable()) {
+      try {
+        const token = await this.ensureAccessToken();
+        await spotifyAppRemote.play(token, uri);
+        if (positionMs > 0) {
+          await spotifyAppRemote.seek(positionMs).catch(() => {});
+        }
+        this.kind = 'appremote';
+        this.wireAppRemote();
+        this.emit();
+        return 'appremote';
+      } catch (err) {
+        if (__DEV__) {
+          console.log('[Spotify] App Remote play failed, trying Web API device:', err);
+        }
+      }
+    }
+
+    // Next: full track on the user's active Spotify device (Web API).
     if (this.tokens || (await this.restore(), this.tokens)) {
       try {
         const devicesData = await this.api('/me/player/devices');
@@ -436,7 +472,11 @@ export class SpotifyProvider implements MusicProvider {
   }
 
   public async pause(): Promise<void> {
-    if (this.kind === 'preview') {
+    if (this.kind === 'appremote') {
+      await spotifyAppRemote.pause().catch(async () => {
+        await this.api('/me/player/pause', { method: 'PUT' }).catch(() => {});
+      });
+    } else if (this.kind === 'preview') {
       audioEngine.pause();
     } else if (this.kind === 'remote') {
       await this.api('/me/player/pause', { method: 'PUT' }).catch(() => {});
@@ -446,7 +486,9 @@ export class SpotifyProvider implements MusicProvider {
   }
 
   public async resume(): Promise<void> {
-    if (this.kind === 'preview') {
+    if (this.kind === 'appremote') {
+      await spotifyAppRemote.resume();
+    } else if (this.kind === 'preview') {
       audioEngine.resume();
     } else if (this.kind === 'remote') {
       await this.api('/me/player/play', { method: 'PUT' });
@@ -456,7 +498,9 @@ export class SpotifyProvider implements MusicProvider {
   }
 
   public async seek(positionMs: number): Promise<void> {
-    if (this.kind === 'preview') {
+    if (this.kind === 'appremote') {
+      await spotifyAppRemote.seek(positionMs);
+    } else if (this.kind === 'preview') {
       await audioEngine.seek(Math.min(positionMs, 29_000));
     } else if (this.kind === 'remote') {
       await this.api(
@@ -469,6 +513,20 @@ export class SpotifyProvider implements MusicProvider {
   }
 
   public async getSnapshot(): Promise<PlaybackSnapshot> {
+    if (this.kind === 'appremote') {
+      const live = (await spotifyAppRemote.getState()) ?? this.appRemoteState;
+      if (live) {
+        this.appRemoteState = live;
+        return {
+          trackKey: live.trackUri ?? this.currentTrack?.providerIds.spotify ?? null,
+          isPlaying: live.isPlaying,
+          isBuffering: false,
+          positionMs: live.positionMs,
+          durationMs: live.durationMs ?? this.currentTrack?.durationMs ?? null,
+          kind: 'appremote',
+        };
+      }
+    }
     if (this.kind === 'preview') {
       const snap = audioEngine.snapshot();
       return { ...snap, kind: 'preview' };
@@ -519,6 +577,29 @@ export class SpotifyProvider implements MusicProvider {
 
   public getKind(): PlaybackKind | null {
     return this.kind;
+  }
+
+  /**
+   * Subscribe (once) to pushed App Remote player state: keep the
+   * snapshot fresh without polling, and treat a track change away from
+   * the track we started as that track ending, so the Deck's
+   * auto-advance behaves the same as it does for previews.
+   */
+  private wireAppRemote(): void {
+    if (this.appRemoteWired) return;
+    this.appRemoteWired = true;
+    spotifyAppRemote.onState((state) => {
+      this.appRemoteState = state;
+      if (
+        this.kind === 'appremote' &&
+        this.currentTrack &&
+        state.trackUri &&
+        state.trackUri !== this.currentTrack.providerIds.spotify
+      ) {
+        this.endedListeners.forEach((cb) => cb());
+      }
+      this.emit();
+    });
   }
 
   // --- events ---

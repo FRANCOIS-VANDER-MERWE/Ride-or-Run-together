@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "PACELOCK · Ride or Run Together",
+    "name": "PACELOCK \u00b7 Ride or Run Together",
     "slug": "ride-or-run-together",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -42,7 +42,15 @@
       "expo-asset",
       "expo-audio",
       "expo-secure-store",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "@wwdrew/expo-spotify-sdk",
+        {
+          "clientID": "REPLACE_WITH_EXPO_PUBLIC_SPOTIFY_CLIENT_ID",
+          "scheme": "pacelock",
+          "host": "spotify-auth-callback"
+        }
+      ]
     ]
   }
 }
