@@ -221,3 +221,30 @@ export async function updatePlaybackState(
     throw new Error(`[Supabase] updatePlaybackState: ${error.message}`);
   }
 }
+
+export interface QueueEntry {
+  item: SessionQueueRow;
+  track: TrackRow | null;
+}
+
+/** Queue rows for a session with their catalog tracks joined in. */
+export async function fetchSessionQueueWithTracks(
+  sessionId: string
+): Promise<QueueEntry[]> {
+  const db = requireSupabase();
+  const { data, error } = await db
+    .from('session_queue')
+    .select('*, track:tracks(*)')
+    .eq('session_id', sessionId)
+    .neq('status', 'removed')
+    .order('position', { ascending: true });
+  if (error) {
+    throw new Error(`[Supabase] fetchSessionQueueWithTracks: ${error.message}`);
+  }
+  return (data ?? []).map((row) => {
+    const { track, ...item } = row as SessionQueueRow & {
+      track: TrackRow | null;
+    };
+    return { item: item as SessionQueueRow, track: track ?? null };
+  });
+}
