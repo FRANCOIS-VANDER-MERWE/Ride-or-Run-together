@@ -53,7 +53,24 @@ import {
   fetchProfile,
   searchProfilesByUsername,
 } from '../services/profilesService';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { fetchLatestPings } from '../services/rideDataService';
+import {
+  enqueueTrack,
+  fetchPlaybackState,
+  fetchSessionQueueWithTracks,
+  setQueueItemStatus,
+  updatePlaybackState,
+  type QueueEntry,
+} from '../services/musicDataService';
+import {
+  subscribeToTableChanges,
+  unsubscribeChannel,
+} from '../services/supabaseClient';
+import type {
+  MusicProviderId,
+  SessionPlaybackStateRow,
+} from '../services/database.types';
 import {
   startLocationSharing,
   subscribeToLocationFixes,
@@ -99,6 +116,15 @@ export default function PackDeck() {
   const fixesUnsubRef = useRef<(() => void) | null>(null);
   const liveSessionRef = useRef<string | null>(null);
   const [liveFixes, setLiveFixes] = useState<Record<string, LiveFix>>({});
+
+  const [queueEntries, setQueueEntries] = useState<QueueEntry[]>([]);
+  const [playback, setPlayback] = useState<SessionPlaybackStateRow | null>(null);
+  const queueChannelsRef = useRef<RealtimeChannel[]>([]);
+  const [trackTitle, setTrackTitle] = useState('');
+  const [trackArtist, setTrackArtist] = useState('');
+  const [trackProvider, setTrackProvider] =
+    useState<MusicProviderId>('apple_music');
+  const [trackProviderId, setTrackProviderId] = useState('');
 
   const [newTitle, setNewTitle] = useState('');
   const [newVisibility, setNewVisibility] =
@@ -171,11 +197,6 @@ export default function PackDeck() {
     setLiveFixes({});
   }, []);
 
-  useEffect(() => {
-    return () => {
-      void stopLive();
-    };
-  }, [stopLive]);
 
   const startLiveView = useCallback(
     async (session: RideSessionRow) => {
@@ -228,13 +249,63 @@ export default function PackDeck() {
     }
   };
 
+  const loadQueue = useCallback(async (sessionId: string) => {
+    try {
+      const [entries, state] = await Promise.all([
+        fetchSessionQueueWithTracks(sessionId),
+        fetchPlaybackState(sessionId),
+      ]);
+      setQueueEntries(entries);
+      setPlayback(state);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load queue.');
+    }
+  }, []);
+
+  const stopQueueView = useCallback(async () => {
+    for (const ch of queueChannelsRef.current) {
+      await unsubscribeChannel(ch);
+    }
+    queueChannelsRef.current = [];
+    setQueueEntries([]);
+    setPlayback(null);
+  }, []);
+
+  const startQueueView = useCallback(
+    (session: RideSessionRow) => {
+      void loadQueue(session.session_id);
+      const onChange = () => void loadQueue(session.session_id);
+      const q = subscribeToTableChanges('session_queue', {
+        sessionId: session.session_id,
+        onChange,
+      });
+      const p = subscribeToTableChanges('session_playback_state', {
+        sessionId: session.session_id,
+        onChange,
+      });
+      queueChannelsRef.current = [q, p].filter(
+        (c): c is RealtimeChannel => Boolean(c)
+      );
+    },
+    [loadQueue]
+  );
+
+  useEffect(() => {
+    return () => {
+      void stopLive();
+      void stopQueueView();
+    };
+  }, [stopLive, stopQueueView]);
+
   const toggleExpand = async (session: RideSessionRow) => {
     if (expandedId === session.session_id) {
       await stopLive();
+      await stopQueueView();
       setExpandedId(null);
       return;
     }
     await stopLive();
+    await stopQueueView();
     setExpandedId(session.session_id);
     setParticipants([]);
     try {
@@ -249,6 +320,7 @@ export default function PackDeck() {
       }
       setNames(map);
       void startLiveView(session);
+      startQueueView(session);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load riders.');
     }
@@ -461,6 +533,206 @@ export default function PackDeck() {
                       Live location starts when the host starts the session.
                     </Text>
                   )}
+                  <View style={styles.inviteBlock}>
+                    <Text style={styles.subtle}>SHARED QUEUE</Text>
+                    {(() => {
+                      const current = queueEntries.find(
+                        (e) => e.item.queue_item_id === playback?.current_item_id
+                      );
+                      return (
+                        <Text style={styles.body}>
+                          {current
+                            ? `Now: ${current.track?.title ?? 'Track'} · ${
+                                playback?.is_playing ? 'playing' : 'paused'
+                              }`
+                            : 'Nothing playing yet. Queue a track below.'}
+                        </Text>
+                      );
+                    })()}
+                    {playback?.current_item_id && (
+                      <View style={styles.actionRow}>
+                        <Pressable
+                          style={styles.smallBtn}
+                          disabled={busy}
+                          onPress={() =>
+                            void run(async () => {
+                              await updatePlaybackState(session.session_id, {
+                                is_playing: !playback.is_playing,
+                              });
+                              await loadQueue(session.session_id);
+                            })
+                          }
+                        >
+                          <Text style={styles.smallBtnText}>
+                            {playback.is_playing ? 'Pause' : 'Play'}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    )}
+                    {queueEntries.length === 0 && (
+                      <Text style={styles.body}>Queue is empty.</Text>
+                    )}
+                    {queueEntries.map((entry) => (
+                      <View
+                        key={entry.item.queue_item_id}
+                        style={styles.actionRow}
+                      >
+                        <Text style={styles.body}>
+                          {entry.item.position}.{' '}
+                          {entry.track?.title ?? 'Unknown track'}
+                          {entry.track ? ` · ${entry.track.artist}` : ''}
+                          {' · '}
+                          {entry.item.status}
+                        </Text>
+                        {entry.item.status === 'queued' && (
+                          <Pressable
+                            style={styles.smallBtn}
+                            disabled={busy}
+                            onPress={() =>
+                              void run(async () => {
+                                const prev = queueEntries.find(
+                                  (e) => e.item.status === 'playing'
+                                );
+                                if (
+                                  prev &&
+                                  prev.item.queue_item_id !==
+                                    entry.item.queue_item_id
+                                ) {
+                                  await setQueueItemStatus(
+                                    prev.item.queue_item_id,
+                                    'played'
+                                  );
+                                }
+                                await setQueueItemStatus(
+                                  entry.item.queue_item_id,
+                                  'playing'
+                                );
+                                await updatePlaybackState(session.session_id, {
+                                  current_item_id: entry.item.queue_item_id,
+                                  is_playing: true,
+                                  position_ms: 0,
+                                  dj_user_id: myId,
+                                });
+                                await loadQueue(session.session_id);
+                              })
+                            }
+                          >
+                            <Text style={styles.smallBtnText}>Play</Text>
+                          </Pressable>
+                        )}
+                        {(entry.item.status === 'queued' ||
+                          entry.item.status === 'playing') && (
+                          <Pressable
+                            style={styles.smallBtn}
+                            disabled={busy}
+                            onPress={() =>
+                              void run(async () => {
+                                await setQueueItemStatus(
+                                  entry.item.queue_item_id,
+                                  entry.item.status === 'playing'
+                                    ? 'skipped'
+                                    : 'removed'
+                                );
+                                if (
+                                  playback?.current_item_id ===
+                                  entry.item.queue_item_id
+                                ) {
+                                  await updatePlaybackState(
+                                    session.session_id,
+                                    {
+                                      current_item_id: null,
+                                      is_playing: false,
+                                      position_ms: 0,
+                                    }
+                                  );
+                                }
+                                await loadQueue(session.session_id);
+                              })
+                            }
+                          >
+                            <Text style={styles.smallBtnText}>
+                              {entry.item.status === 'playing'
+                                ? 'Skip'
+                                : 'Remove'}
+                            </Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    ))}
+                    <TextInput
+                      style={styles.input}
+                      value={trackTitle}
+                      onChangeText={setTrackTitle}
+                      placeholder="Track title"
+                      placeholderTextColor={MUTED}
+                    />
+                    <TextInput
+                      style={styles.input}
+                      value={trackArtist}
+                      onChangeText={setTrackArtist}
+                      placeholder="Artist"
+                      placeholderTextColor={MUTED}
+                    />
+                    <View style={styles.segmentRow}>
+                      {(['apple_music', 'spotify'] as MusicProviderId[]).map(
+                        (p) => (
+                          <Pressable
+                            key={p}
+                            onPress={() => setTrackProvider(p)}
+                            style={[
+                              styles.segment,
+                              trackProvider === p && styles.segmentActive,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.segmentText,
+                                trackProvider === p &&
+                                  styles.segmentTextActive,
+                              ]}
+                            >
+                              {p === 'apple_music' ? 'Apple Music' : 'Spotify'}
+                            </Text>
+                          </Pressable>
+                        )
+                      )}
+                    </View>
+                    <TextInput
+                      style={styles.input}
+                      value={trackProviderId}
+                      onChangeText={setTrackProviderId}
+                      placeholder="Provider track ID (optional)"
+                      placeholderTextColor={MUTED}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                    <Pressable
+                      style={[styles.primaryBtn, busy && styles.disabled]}
+                      disabled={busy}
+                      onPress={() =>
+                        void run(async () => {
+                          if (!myId) throw new Error('Not signed in.');
+                          if (!trackTitle.trim() || !trackArtist.trim()) {
+                            throw new Error('Enter a title and artist.');
+                          }
+                          await enqueueTrack(session.session_id, myId, {
+                            provider: trackProvider,
+                            providerTrackId:
+                              trackProviderId.trim() ||
+                              `manual-${myId.slice(0, 6)}-${Date.now()}`,
+                            title: trackTitle.trim(),
+                            artist: trackArtist.trim(),
+                          });
+                          setTrackTitle('');
+                          setTrackArtist('');
+                          setTrackProviderId('');
+                          await loadQueue(session.session_id);
+                        }, 'Track added to the shared queue.')
+                      }
+                    >
+                      <Text style={styles.primaryBtnText}>Add to Queue</Text>
+                    </Pressable>
+                  </View>
                   {isHost && friends.length > 0 && (
                     <View style={styles.inviteBlock}>
                       <Text style={styles.subtle}>Invite a friend:</Text>
