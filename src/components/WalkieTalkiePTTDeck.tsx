@@ -20,6 +20,7 @@ import {
   Users,
 } from './Icons';
 import { Athlete, VoiceTransmission } from '../data/sessionData';
+import { WalkieSnapshot } from '../services/liveKitVoiceService';
 
 interface WalkieTalkiePTTDeckProps {
   isPttActive: boolean;
@@ -30,6 +31,8 @@ interface WalkieTalkiePTTDeckProps {
   activeSpeakerId: string | null;
   athletes: Athlete[];
   voiceFeed: VoiceTransmission[];
+  voice: WalkieSnapshot;
+  onRetryVoice: () => void;
   onSendQuickCallout: (text: string) => void;
   onTriggerTeammateCallout: () => void;
   soundEffectsEnabled: boolean;
@@ -58,6 +61,8 @@ export default function WalkieTalkiePTTDeck({
   activeSpeakerId,
   athletes,
   voiceFeed,
+  voice,
+  onRetryVoice,
   onSendQuickCallout,
   onTriggerTeammateCallout,
   soundEffectsEnabled,
@@ -66,7 +71,35 @@ export default function WalkieTalkiePTTDeck({
   const [selectedPresetIdx, setSelectedPresetIdx] = useState(0);
 
   const activeSpeaker = athletes.find((a) => a.id === activeSpeakerId) || null;
-  const isChannelOpen = Boolean(activeSpeakerId);
+  const remoteSpeakers = voice.transmitters.map((peer) => peer.name).join(', ');
+  const isChannelOpen = Boolean(activeSpeakerId) || Boolean(remoteSpeakers);
+
+  const isLive = voice.mode === 'live';
+  const isConnected = voice.connection === 'connected';
+  const canTalk = !isLive || isConnected;
+  const isConnecting =
+    voice.connection === 'connecting' || voice.connection === 'reconnecting';
+
+  let statusText = 'CHANNEL STANDBY · READY TO TALK';
+  if (isPttActive) {
+    if (!isLive) statusText = 'TRANSMITTING TO ALL 5 PHONES...';
+    else statusText = voice.isMicLive ? 'TRANSMITTING TO PACK...' : 'OPENING MIC...';
+  } else if (remoteSpeakers) {
+    statusText = `RECEIVING: ${remoteSpeakers.toUpperCase()}`;
+  } else if (activeSpeaker) {
+    statusText = `RECEIVING: ${activeSpeaker.name.toUpperCase()}`;
+  } else if (isConnecting) {
+    statusText = 'JOINING VOICE CHANNEL...';
+  } else if (!canTalk) {
+    statusText = 'VOICE CHANNEL OFFLINE';
+  }
+
+  let footerText = `LiveKit · ${voice.roomName} · ${voice.callsign}`;
+  if (voice.simulatedReason === 'needs-dev-build') {
+    footerText = 'Simulated voice · Live voice needs a development build';
+  } else if (voice.simulatedReason === 'needs-token-url') {
+    footerText = 'Simulated voice · Set EXPO_PUBLIC_LIVEKIT_TOKEN_URL';
+  }
 
   return (
     <View
@@ -95,7 +128,9 @@ export default function WalkieTalkiePTTDeck({
                 WALKIE-TALKIE · LIVEKIT CLOUD
               </Text>
               <View style={styles.meshBadge}>
-                <Text style={styles.meshBadgeText}>5/5 WEBRTC MESH</Text>
+                <Text style={styles.meshBadgeText}>
+                  {isLive ? `${voice.peers.length + 1} ON CHANNEL` : 'SIMULATED'}
+                </Text>
               </View>
             </View>
             <Text style={styles.deckTitle}>
@@ -119,13 +154,15 @@ export default function WalkieTalkiePTTDeck({
             )}
           </Pressable>
 
-          <Pressable
-            onPress={onTriggerTeammateCallout}
-            style={styles.demoPeerBtn}
-          >
-            <Sparkles size={13} color="#00F0FF" />
-            <Text style={styles.demoPeerBtnText}>Demo Peer Call</Text>
-          </Pressable>
+          {!isLive && (
+            <Pressable
+              onPress={onTriggerTeammateCallout}
+              style={styles.demoPeerBtn}
+            >
+              <Sparkles size={13} color="#00F0FF" />
+              <Text style={styles.demoPeerBtnText}>Demo Peer Call</Text>
+            </Pressable>
+          )}
         </View>
       </View>
 
@@ -137,16 +174,16 @@ export default function WalkieTalkiePTTDeck({
               style={[
                 styles.statusDot,
                 {
-                  backgroundColor: isChannelOpen ? '#FF4D2A' : '#10B981',
+                  backgroundColor: isChannelOpen
+                    ? '#FF4D2A'
+                    : canTalk
+                    ? '#10B981'
+                    : '#64748B',
                 },
               ]}
             />
             <Text style={styles.statusText} numberOfLines={1}>
-              {isPttActive
-                ? 'TRANSMITTING TO ALL 5 PHONES...'
-                : activeSpeaker
-                ? `RECEIVING: ${activeSpeaker.name.toUpperCase()}`
-                : 'CHANNEL STANDBY · READY TO TALK'}
+              {statusText}
             </Text>
           </View>
           <Text style={styles.codecText}>
@@ -169,7 +206,7 @@ export default function WalkieTalkiePTTDeck({
                     height: `${activeHeight}%`,
                     backgroundColor: isPttActive
                       ? '#FF4D2A'
-                      : activeSpeaker
+                      : activeSpeaker || remoteSpeakers
                       ? '#00F0FF'
                       : '#334155',
                   },
@@ -180,9 +217,14 @@ export default function WalkieTalkiePTTDeck({
         </View>
       </View>
 
+      {voice.error && <Text style={styles.errorText}>{voice.error}</Text>}
+
       {/* TACTILE HARDWARE PUSH-TO-TALK (PTT) PADDLE BUTTON + HANDS-FREE LATCH */}
       <View style={styles.pttRow}>
         <Pressable
+          onPress={() => {
+            if (!canTalk && !isConnecting) onRetryVoice();
+          }}
           onPressIn={onStartPtt}
           onPressOut={() => {
             if (!isLatched) onStopPtt();
@@ -190,6 +232,7 @@ export default function WalkieTalkiePTTDeck({
           style={[
             styles.pttPaddleBtn,
             isPttActive && styles.pttPaddleBtnActive,
+            !canTalk && styles.pttPaddleBtnOffline,
           ]}
         >
           {isPttActive ? (
@@ -203,7 +246,11 @@ export default function WalkieTalkiePTTDeck({
             <>
               <Mic size={20} color="#FFFFFF" />
               <Text style={styles.pttPaddleText}>
-                HOLD TO TALK TO PACK
+                {canTalk
+                  ? 'HOLD TO TALK TO PACK'
+                  : isConnecting
+                  ? 'CONNECTING...'
+                  : 'VOICE OFFLINE · TAP TO RETRY'}
               </Text>
             </>
           )}
@@ -284,13 +331,25 @@ export default function WalkieTalkiePTTDeck({
       <View style={styles.feedList}>
         {voiceFeed.slice(0, 4).map((vc) => (
           <View key={vc.id} style={styles.feedItem}>
-            <Image
-              source={{ uri: vc.speakerAvatar }}
-              style={[
-                styles.feedAvatar,
-                { borderColor: vc.speakerColor },
-              ]}
-            />
+            {vc.speakerAvatar ? (
+              <Image
+                source={{ uri: vc.speakerAvatar }}
+                style={[
+                  styles.feedAvatar,
+                  { borderColor: vc.speakerColor },
+                ]}
+              />
+            ) : (
+              <View
+                style={[
+                  styles.feedAvatar,
+                  styles.feedAvatarFallback,
+                  { borderColor: vc.speakerColor },
+                ]}
+              >
+                <Radio size={13} color={vc.speakerColor} />
+              </View>
+            )}
             <View style={{ flex: 1 }}>
               <View style={styles.feedHeaderRow}>
                 <Text
@@ -300,7 +359,9 @@ export default function WalkieTalkiePTTDeck({
                   {vc.speakerName}
                 </Text>
                 <Text style={styles.feedTimestamp}>
-                  @{vc.progressAtCallPct.toFixed(0)}% · {vc.timestamp}
+                  {vc.progressAtCallPct === null
+                    ? vc.timestamp
+                    : `@${vc.progressAtCallPct.toFixed(0)}% · ${vc.timestamp}`}
                 </Text>
               </View>
               <Text style={styles.feedTranscript}>"{vc.transcript}"</Text>
@@ -311,18 +372,20 @@ export default function WalkieTalkiePTTDeck({
 
       {/* Footer LiveKit Cloud API Pill */}
       <View style={styles.footerRow}>
-        <View style={styles.footerItem}>
-          <ShieldCheck size={13} color="#10B981" />
-          <Text style={styles.footerText}>
-            LiveKit Cloud SF-West · Call-to-Call Active
+        <View style={[styles.footerItem, { flex: 1 }]}>
+          <ShieldCheck size={13} color={isLive ? '#10B981' : '#64748B'} />
+          <Text style={[styles.footerText, { flex: 1 }]} numberOfLines={1}>
+            {footerText}
           </Text>
         </View>
-        <View style={styles.footerItem}>
-          <Users size={13} color="#00F0FF" />
-          <Text style={[styles.footerText, { color: '#CBD5E1' }]}>
-            5 Phones
-          </Text>
-        </View>
+        {isLive && (
+          <View style={styles.footerItem}>
+            <Users size={13} color="#00F0FF" />
+            <Text style={[styles.footerText, { color: '#CBD5E1' }]}>
+              {voice.peers.length + 1}
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -504,6 +567,14 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
     transform: [{ scale: 0.99 }],
   },
+  pttPaddleBtnOffline: {
+    backgroundColor: '#334155',
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  errorText: {
+    fontSize: 11,
+    color: '#FCA5A5',
+  },
   pttPaddleText: {
     fontSize: 13,
     fontWeight: '800',
@@ -615,6 +686,11 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 2,
     marginTop: 2,
+  },
+  feedAvatarFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 240, 255, 0.1)',
   },
   feedHeaderRow: {
     flexDirection: 'row',

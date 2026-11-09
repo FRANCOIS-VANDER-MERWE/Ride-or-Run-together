@@ -31,3 +31,22 @@ A social group running & cycling mobile app built with **Expo (React Native + Ty
    ```bash
    cp .env.example .env
    ```
+
+## Live Walkie-Talkie
+
+The walkie-talkie uses the [LiveKit React Native SDK](https://github.com/livekit/client-sdk-react-native). It needs native code, so Expo Go and web stay on simulated voice. Real voice needs a development build:
+
+1. Create a [LiveKit Cloud](https://cloud.livekit.io) project, or run your own LiveKit server.
+2. In `.env`, set `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`. Set `EXPO_PUBLIC_LIVEKIT_TOKEN_URL` to `http://<your-computer-LAN-IP>:8787/token`.
+3. Start the token server:
+   ```bash
+   npm run voice:token
+   ```
+4. Build and run on two physical devices on the same network:
+   ```bash
+   npm run ios:dev
+   npm run android:dev
+   ```
+5. Hold the paddle on one phone to talk to the other.
+
+The token server is for development only: it gives a token to anyone who can reach it. Production needs an endpoint that authenticates the user first. It should accept `POST { room_name, participant_identity, participant_name }` and return `{ server_url, participant_token }`.

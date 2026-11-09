@@ -23,4 +23,5 @@ npx expo start
 
 - Runtime: Expo SDK 58 (`~58.0.19`), React 19.3.0, React Native 0.88.0 (New Architecture enabled by default)
 - Storage & Auth: `@supabase/supabase-js` with `expo-sqlite/localStorage/install`
+- Voice: `@livekit/react-native`, `@livekit/react-native-webrtc`, `livekit-client` (needs a development build; Expo Go and web use simulated voice)
 - Native Modules: `expo-location`, `expo-haptics`, `expo-clipboard`, `expo-symbols`, `react-native-svg`, `react-native-safe-area-context`

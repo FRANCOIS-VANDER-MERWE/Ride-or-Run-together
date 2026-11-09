@@ -16,7 +16,10 @@
       "bundleIdentifier": "run.pacelock.app",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "PACELOCK uses your live GPS location to display your position and speed on the shared pack route line.",
-        "NSMicrophoneUsageDescription": "PACELOCK uses your microphone when you hold the Walkie-Talkie Push-To-Talk button."
+        "NSMicrophoneUsageDescription": "PACELOCK uses your microphone when you hold the Walkie-Talkie Push-To-Talk button.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
@@ -24,7 +27,13 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "MODIFY_AUDIO_SETTINGS",
+        "WAKE_LOCK",
+        "BLUETOOTH",
+        "BLUETOOTH_CONNECT"
       ]
     },
     "web": {
@@ -39,7 +48,8 @@
       ],
       "expo-sqlite",
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      "@livekit/react-native-expo-plugin"
     ]
   }
 }

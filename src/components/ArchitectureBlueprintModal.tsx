@@ -48,7 +48,7 @@ export default function ArchitectureBlueprintView() {
     }
   };
 
-  const liveKitStatus = walkieTalkieController.getStatus();
+  const liveKitStatus = walkieTalkieController.getSnapshot();
 
   const supabaseSchemaSql = `-- SUPABASE POSTGRES SCHEMA FOR PACELOCK (RUN & RIDE TOGETHER)
 CREATE TABLE public.users (
@@ -184,7 +184,7 @@ export class PackWalkieTalkieController {
           <View style={styles.envPill}>
             <CheckCircle2 size={12} color="#FF4D2A" />
             <Text style={styles.envPillText}>
-              LiveKit PTT: {liveKitStatus.serverRegion}
+              LiveKit PTT: {liveKitStatus.mode === 'live' ? liveKitStatus.roomName : 'Simulated'}
             </Text>
           </View>
         </View>

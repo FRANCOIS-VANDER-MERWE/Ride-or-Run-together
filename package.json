@@ -8,20 +8,28 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "ios:dev": "expo run:ios --device",
+    "android:dev": "expo run:android --device",
+    "voice:token": "node --env-file-if-exists=.env server/livekit-token-server.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@expo/metro-runtime": "~58.0.15",
+    "@livekit/react-native": "^3.1.0",
+    "@livekit/react-native-expo-plugin": "^1.1.0",
+    "@livekit/react-native-webrtc": "^150.1.1",
     "@supabase/supabase-js": "^2.48.1",
     "expo": "~58.0.19",
     "expo-asset": "~58.0.18",
     "expo-clipboard": "~58.0.4",
+    "expo-dev-client": "~58.0.18",
     "expo-font": "~58.0.10",
     "expo-haptics": "~58.0.7",
     "expo-location": "~58.0.19",
     "expo-sqlite": "~58.0.14",
     "expo-status-bar": "~58.0.4",
     "expo-symbols": "~58.0.4",
+    "livekit-client": "^2.23.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.0",
@@ -31,6 +39,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.3.0",
+    "livekit-server-sdk": "^2.19.2",
     "typescript": "~6.0.3"
   }
 }

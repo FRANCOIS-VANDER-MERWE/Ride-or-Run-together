@@ -67,7 +67,8 @@ export interface VoiceTransmission {
   transcript: string;
   timestamp: string;
   durationSec: number;
-  progressAtCallPct: number;
+  /** Null for live peers, whose route position isn't shared over voice. */
+  progressAtCallPct: number | null;
 }
 
 export interface BroadcastSignalEvent {

@@ -1,5 +1,12 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, {
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
 import {
+  AppState,
   View,
   Text,
   Pressable,
@@ -62,7 +69,7 @@ import {
   broadcastMusicSyncSignal,
   translateBroadcastToSpotifyPlayer,
 } from './services/spotifySyncService';
-import { walkieTalkieController } from './services/liveKitVoiceService';
+import { VoicePeer, walkieTalkieController } from './services/liveKitVoiceService';
 import { startDeviceGpsTracking } from './services/locationTelemetryService';
 
 export type BottomTabId = 'cockpit' | 'map' | 'ptt' | 'spotify' | 'architecture';
@@ -136,12 +143,24 @@ export default function App() {
     useState<RoadHazardPin[]>(INITIAL_HAZARD_PINS);
 
   // Walkie-Talkie Push-To-Talk (LiveKit Cloud) State
+  const voice = useSyncExternalStore(
+    walkieTalkieController.subscribe,
+    walkieTalkieController.getSnapshot
+  );
+  const isLiveVoice = voice.mode === 'live';
+  const canTalk = !isLiveVoice || voice.connection === 'connected';
   const [isPttActive, setIsPttActive] = useState(false);
   const [isPttLatched, setIsPttLatched] = useState(false);
   const [activeSpeakerId, setActiveSpeakerId] = useState<string | null>(null);
+  const isVoiceChannelOpen =
+    Boolean(activeSpeakerId) || voice.transmitters.length > 0;
   const [voiceFeed, setVoiceFeed] = useState<VoiceTransmission[]>(
-    INITIAL_VOICE_CALLOUTS
+    isLiveVoice ? [] : INITIAL_VOICE_CALLOUTS
   );
+  // The ref is read on release, so a quick tap can't see stale state and leave
+  // the mic open.
+  const pttActiveRef = useRef(false);
+  const pttStartedAtRef = useRef(0);
   const [soundEffectsEnabled, setSoundEffectsEnabled] = useState(true);
   const teammateCallCursor = useRef(0);
 
@@ -344,22 +363,98 @@ export default function App() {
     currentTrackIndex,
   ]);
 
+  // Join the pack voice channel for as long as the app is open
+  useEffect(() => {
+    walkieTalkieController.connect();
+    return () => {
+      walkieTalkieController.disconnect();
+    };
+  }, []);
+
+  // Live voice events from the rest of the pack
+  useEffect(() => {
+    const addPeerEntry = (
+      peer: VoicePeer,
+      transcript: string,
+      durationSec: number
+    ) => {
+      const entry: VoiceTransmission = {
+        id: `vc-${peer.identity}-${Date.now()}`,
+        speakerId: peer.identity,
+        speakerName: peer.name,
+        speakerColor: '#00F0FF',
+        speakerAvatar: '',
+        transcript,
+        timestamp: 'Just now',
+        durationSec,
+        progressAtCallPct: null,
+      };
+      setVoiceFeed((prev) => [entry, ...prev.slice(0, 8)]);
+    };
+
+    return walkieTalkieController.onEvent((event) => {
+      switch (event.type) {
+        case 'remote-transmit-start':
+          playPttOpenChirp(soundEffectsEnabled);
+          break;
+        case 'remote-transmit-end':
+          playPttCloseSquelch(soundEffectsEnabled);
+          addPeerEntry(
+            event.peer,
+            `Voice transmission · ${event.durationSec.toFixed(1)}s`,
+            event.durationSec
+          );
+          break;
+        case 'remote-callout':
+          playPttOpenChirp(soundEffectsEnabled);
+          addPeerEntry(event.peer, event.text, 0);
+          break;
+        case 'mic-failed':
+          pttActiveRef.current = false;
+          setIsPttActive(false);
+          setIsPttLatched(false);
+          setActiveSpeakerId(null);
+          break;
+      }
+    });
+  }, [soundEffectsEnabled]);
+
   // Walkie-Talkie PTT Start / Stop Handlers
   const handleStartPtt = useCallback(() => {
-    if (isPttActive) return;
+    if (pttActiveRef.current || !canTalk) return;
+    pttActiveRef.current = true;
+    pttStartedAtRef.current = Date.now();
     setIsPttActive(true);
     setActiveSpeakerId('athlete-you');
     playPttOpenChirp(soundEffectsEnabled);
     walkieTalkieController.pushToTalkOpen();
-  }, [isPttActive, soundEffectsEnabled]);
+  }, [canTalk, soundEffectsEnabled]);
 
   const handleStopPtt = useCallback(() => {
-    if (!isPttActive) return;
+    if (!pttActiveRef.current) return;
+    pttActiveRef.current = false;
     setIsPttActive(false);
     setIsPttLatched(false);
     setActiveSpeakerId(null);
     playPttCloseSquelch(soundEffectsEnabled);
     walkieTalkieController.pushToTalkRelease();
+
+    if (isLiveVoice) {
+      const durationSec = (Date.now() - pttStartedAtRef.current) / 1000;
+      const liveCall: VoiceTransmission = {
+        id: `vc-${Date.now()}`,
+        speakerId: selfAthlete.id,
+        speakerName: `${voice.callsign} (You)`,
+        speakerColor: selfAthlete.color,
+        speakerAvatar: selfAthlete.avatar,
+        transcript: `Voice transmission · ${durationSec.toFixed(1)}s`,
+        timestamp: 'Just now',
+        durationSec,
+        progressAtCallPct: selfAthlete.progress,
+      };
+      setVoiceFeed((prev) => [liveCall, ...prev.slice(0, 8)]);
+      return;
+    }
 
     const currentSeg =
       currentRoute.segments.find(
@@ -383,24 +478,53 @@ export default function App() {
     };
     setVoiceFeed((prev) => [newCall, ...prev.slice(0, 8)]);
   }, [
-    isPttActive,
+    isLiveVoice,
+    voice.callsign,
     soundEffectsEnabled,
     currentRoute.segments,
     selfAthlete,
     effortLevel,
   ]);
 
+  // Leaving the app mid-hold may never deliver the release, so close the mic here.
+  // A latched mic is left open on purpose.
+  useEffect(() => {
+    if (!isPttActive || isPttLatched) return;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') handleStopPtt();
+    });
+    return () => subscription.remove();
+  }, [isPttActive, isPttLatched, handleStopPtt]);
+
   const handleToggleLatch = () => {
     if (isPttLatched) {
       handleStopPtt();
-    } else {
+    } else if (canTalk) {
       setIsPttLatched(true);
       handleStartPtt();
     }
   };
 
   // Send a Quick Preset Voice Callout
-  const handleSendQuickCallout = (text: string) => {
+  const handleSendQuickCallout = async (text: string) => {
+    if (isLiveVoice) {
+      if (!(await walkieTalkieController.sendCallout(text))) return;
+      playPttOpenChirp(soundEffectsEnabled);
+      const sentCallout: VoiceTransmission = {
+        id: `vc-${Date.now()}`,
+        speakerId: selfAthlete.id,
+        speakerName: `${voice.callsign} (You)`,
+        speakerColor: selfAthlete.color,
+        speakerAvatar: selfAthlete.avatar,
+        transcript: text,
+        timestamp: 'Just now',
+        durationSec: 0,
+        progressAtCallPct: selfAthlete.progress,
+      };
+      setVoiceFeed((prev) => [sentCallout, ...prev.slice(0, 8)]);
+      return;
+    }
+
     playPttOpenChirp(soundEffectsEnabled);
     setActiveSpeakerId('athlete-you');
     setIsPttActive(true);
@@ -805,7 +929,11 @@ export default function App() {
                       <>
                         <Mic size={18} color="#FFFFFF" />
                         <Text style={styles.quickPttButtonText}>
-                          HOLD TO TALK TO ALL 5 PHONES
+                          {!canTalk
+                            ? 'VOICE OFFLINE · OPEN PTT TAB'
+                            : isLiveVoice
+                            ? 'HOLD TO TALK TO PACK'
+                            : 'HOLD TO TALK TO ALL 5 PHONES'}
                         </Text>
                       </>
                     )}
@@ -850,7 +978,7 @@ export default function App() {
                     </Text>
                     <Text style={styles.quickTrackArtist} numberOfLines={1}>
                       {currentTrack.artist} ·{' '}
-                      {activeSpeakerId
+                      {isVoiceChannelOpen
                         ? 'Auto-Ducked 25% (PTT Open)'
                         : '5/5 Phones Synced'}
                     </Text>
@@ -924,6 +1052,8 @@ export default function App() {
                 activeSpeakerId={activeSpeakerId}
                 athletes={athletes}
                 voiceFeed={voiceFeed}
+                voice={voice}
+                onRetryVoice={() => walkieTalkieController.connect()}
                 onSendQuickCallout={handleSendQuickCallout}
                 onTriggerTeammateCallout={handleTriggerTeammateCallout}
                 soundEffectsEnabled={soundEffectsEnabled}
@@ -940,7 +1070,7 @@ export default function App() {
                 currentTrackIndex={currentTrackIndex}
                 isPlaying={isSpotifyPlaying}
                 progressSec={trackProgressSec}
-                isVoiceDucked={Boolean(activeSpeakerId)}
+                isVoiceDucked={isVoiceChannelOpen}
                 athletes={athletes}
                 broadcastLogs={broadcastLogs}
                 onTogglePlay={() => {
