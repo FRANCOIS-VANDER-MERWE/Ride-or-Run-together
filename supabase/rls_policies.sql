@@ -32,6 +32,17 @@ set search_path = public as $$
   );
 $$;
 
+create or replace function public.has_session_invite(p_session_id uuid)
+returns boolean language sql stable security definer
+set search_path = public as $$
+  select exists (
+    select 1 from public.session_invites
+    where session_id = p_session_id
+      and invitee_id = auth.uid()
+      and status in ('pending', 'accepted')
+  );
+$$;
+
 create or replace function public.can_view_session(p_session_id uuid)
 returns boolean language sql stable security definer
 set search_path = public as $$
@@ -47,16 +58,6 @@ set search_path = public as $$
   );
 $$;
 
-create or replace function public.has_session_invite(p_session_id uuid)
-returns boolean language sql stable security definer
-set search_path = public as $$
-  select exists (
-    select 1 from public.session_invites
-    where session_id = p_session_id
-      and invitee_id = auth.uid()
-      and status in ('pending', 'accepted')
-  );
-$$;
 
 create or replace function public.is_playlist_owner(p_playlist_id uuid)
 returns boolean language sql stable security definer
