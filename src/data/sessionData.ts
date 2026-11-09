@@ -48,6 +48,7 @@ export interface RoadHazardPin {
 
 export interface SpotifyTrack {
   id: string;
+  isrc?: string;
   uri: string;
   title: string;
   artist: string;
@@ -398,6 +399,7 @@ export const INITIAL_HAZARD_PINS: RoadHazardPin[] = [
 export const SPOTIFY_PLAYLIST: SpotifyTrack[] = [
   {
     id: 'trk-1',
+    isrc: 'USRC17607839',
     uri: 'spotify:track:7k9xTempoKinetic01',
     title: 'HYPERDRIVE CADENCE (170 BPM EDIT)',
     artist: 'Klangwerk & Subkinetic',
@@ -410,6 +412,7 @@ export const SPOTIFY_PLAYLIST: SpotifyTrack[] = [
   },
   {
     id: 'trk-2',
+    isrc: 'GBUM72401982',
     uri: 'spotify:track:4m2vPelotonAeroSlip02',
     title: 'SLIPSTREAM VELOCITY',
     artist: 'Bicep // Overmono Club Dub',
@@ -422,6 +425,7 @@ export const SPOTIFY_PLAYLIST: SpotifyTrack[] = [
   },
   {
     id: 'trk-3',
+    isrc: 'AUAP02500441',
     uri: 'spotify:track:9p1zThresholdHorizon03',
     title: 'LACTATE THRESHOLD // NEON COAST',
     artist: 'RÜFÜS DU SOL · Pack Edit',
@@ -429,11 +433,12 @@ export const SPOTIFY_PLAYLIST: SpotifyTrack[] = [
     coverUrl:
       'https://images.unsplash.com/photo-1654590390722-c1448c8993aa?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=400',
     durationSec: 229,
-    bpm: 168,
+    bpm: 158,
     targetMode: 'both',
   },
   {
     id: 'trk-4',
+    isrc: 'GBAHS2500914',
     uri: 'spotify:track:2x8qApexSummitKick04',
     title: 'SUMMIT ATTACK (FINAL KILOMETER)',
     artist: 'Fred again.. x Joy Anonymous',
@@ -442,6 +447,32 @@ export const SPOTIFY_PLAYLIST: SpotifyTrack[] = [
       'https://images.unsplash.com/photo-1679189792474-6c2796dc78ab?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=400',
     durationSec: 196,
     bpm: 174,
+    targetMode: 'both',
+  },
+  {
+    id: 'trk-5',
+    isrc: 'USAT22503310',
+    uri: 'spotify:track:5w1kMarinaDawnWarmup05',
+    title: 'MARINA DAWN ROLLOUT (WARMUP)',
+    artist: 'Tycho & Ben Böhmer',
+    album: 'Golden Gate Warmup Tapes',
+    coverUrl:
+      'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=400',
+    durationSec: 205,
+    bpm: 122,
+    targetMode: 'both',
+  },
+  {
+    id: 'trk-6',
+    isrc: 'DEUM72508821',
+    uri: 'spotify:track:8z4pBerlinDubplateExcl06',
+    title: 'BERLIN DUBPLATE (SPOTIFY EXCLUSIVE)',
+    artist: 'Kobosil // Ostgut Ton',
+    album: 'Regional White Label',
+    coverUrl:
+      'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=400',
+    durationSec: 218,
+    bpm: 162,
     targetMode: 'both',
   },
 ];

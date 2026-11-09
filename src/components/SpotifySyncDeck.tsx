@@ -1,34 +1,68 @@
-import React, { useState } from 'react';
+// src/components/SpotifySyncDeck.tsx
+// Music tab: link an Apple Music account, search, and play.
+//
+// SPOTIFY REMOVED (Nov 9, 2026, Tillman's call, time constraints):
+// Apple Music is the only provider in the app for now. The Spotify
+// provider (src/music/providers/SpotifyProvider.ts) is still in the
+// repo but nothing imports it; the full Spotify integration,
+// including the App Remote spike, lives on the app-remote-spike
+// branch. To revive Spotify, restore the provider switcher and the
+// PKCE sign-in block from git history (last present in d1c4ee5).
+//
+// This component is intentionally just a player UI. It talks to the two
+// MusicProvider implementations in src/music/providers and renders their
+// real state. It used to route through a 1,200-line "sync coordinator"
+// with simulated members, fake timestamps, and a Web Audio synthesizer;
+// all of that was removed (Nov 2, 2026) because none of it produced real
+// playback on a phone. Group sync, when it is built, belongs behind the
+// same provider interface, not inside this component.
+//
+// What the labels mean (also shown in the UI):
+// - Apple Music search is the live catalog on every platform; on native
+//   the in-app player plays the official 30s preview. Full Apple playback
+//   works on web through MusicKit when a developer token is configured.
+
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
   Pressable,
   Image,
-  ScrollView,
   StyleSheet,
   Platform,
+  TextInput,
 } from 'react-native';
+
 import {
-  Music2,
-  Play,
-  Pause,
-  SkipForward,
-  SkipBack,
-  RefreshCw,
-  Code2,
+  AlertTriangle,
   CheckCircle2,
+  Music2,
+  Pause,
+  Play,
+  RefreshCw,
+  SkipBack,
+  SkipForward,
   Volume2,
-  ArrowRight,
-  Activity,
-  Cpu,
 } from './Icons';
 import {
+  ActivityMode,
   Athlete,
   BroadcastSignalEvent,
   SpotifyTrack,
 } from '../data/sessionData';
+import { audioEngine } from '../music/audioEngine';
+import { appleMusicProvider } from '../music/providers/AppleMusicProvider';
+import {
+  AuthState,
+  CanonicalTrack,
+  PlaybackKind,
+  PlaybackSnapshot,
+  ProviderError,
+  ProviderId,
+} from '../music/types';
 
 interface SpotifySyncDeckProps {
+  mode?: ActivityMode;
   tracks: SpotifyTrack[];
   currentTrackIndex: number;
   isPlaying: boolean;
@@ -50,768 +84,510 @@ const MONO_FONT = Platform.select({
   default: 'monospace',
 });
 
-function formatTrackTime(sec: number): string {
-  const s = Math.max(0, Math.floor(sec));
+function formatTime(ms: number | null | undefined): string {
+  if (!ms || ms < 0) return '0:00';
+  const s = Math.floor(ms / 1000);
   const mins = Math.floor(s / 60);
   const rem = s % 60;
   return `${mins}:${rem < 10 ? '0' : ''}${rem}`;
 }
 
-export default function SpotifySyncDeck({
-  tracks,
-  currentTrackIndex,
-  isPlaying,
-  progressSec,
-  isVoiceDucked,
-  athletes,
-  broadcastLogs,
-  onTogglePlay,
-  onNextTrack,
-  onPrevTrack,
-  onSeekTrack,
-  onForceResyncBroadcast,
-  onSelectTrackIndex,
-}: SpotifySyncDeckProps) {
-  const [showApiTranslator, setShowApiTranslator] = useState(true);
+const KIND_LABELS: Record<PlaybackKind, string> = {
+  remote: 'Full track · playing on your Spotify device',
+  preview: 'Preview · 30s, playing in this app',
+  musickit: 'Full track · Apple Music (web)',
+};
+
+const PROVIDER_COLORS: Record<ProviderId, string> = {
+  spotify: '#1DB954',
+  apple: '#FA243C',
+};
+
+export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
+  const { isVoiceDucked, isPlaying: appIsPlaying, onTogglePlay } = props;
+
+  // Apple Music only (Nov 9, 2026). providerId stays as a constant so
+  // the render code below keeps its shape for an easy Spotify revival.
+  const providerId: ProviderId = 'apple';
+  const provider = appleMusicProvider;
+  const accent = PROVIDER_COLORS[providerId];
+
+  const [appleAuth, setAppleAuth] = useState<AuthState | null>(null);
+  const activeAuth = appleAuth;
+
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<CanonicalTrack[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const [current, setCurrent] = useState<CanonicalTrack | null>(null);
+  const [currentResultIndex, setCurrentResultIndex] = useState(-1);
+  const [snapshot, setSnapshot] = useState<PlaybackSnapshot | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [barWidth, setBarWidth] = useState(260);
 
-  const currentTrack = tracks[currentTrackIndex] || tracks[0];
-  const latestSignal = broadcastLogs[0];
+  // --- initial auth state ---
+  useEffect(() => {
+    appleMusicProvider.getAuthState().then(setAppleAuth).catch(() => {});
+  }, []);
 
-  const pctPlayed = Math.min(
-    100,
-    Math.max(0, (progressSec / currentTrack.durationSec) * 100)
-  );
+  // --- keep the rest of the app informed of real play state ---
+  const lastReportedPlaying = useRef<boolean | null>(null);
+  useEffect(() => {
+    const playing = snapshot?.isPlaying ?? null;
+    if (playing === null || !current) return;
+    if (lastReportedPlaying.current === playing) return;
+    lastReportedPlaying.current = playing;
+    if (playing !== appIsPlaying) {
+      onTogglePlay();
+    }
+  }, [snapshot?.isPlaying, current, appIsPlaying, onTogglePlay]);
+
+  // --- voice ducking affects the in-app preview player ---
+  useEffect(() => {
+    audioEngine.setVolume(isVoiceDucked ? 0.25 : 1);
+  }, [isVoiceDucked]);
+
+  // --- snapshot polling for the active provider while something is loaded ---
+  useEffect(() => {
+    if (!current) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const snap = await provider.getSnapshot();
+        if (!cancelled) setSnapshot(snap);
+      } catch {
+        // A failed poll is not fatal; the next one retries.
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [current, provider]);
+
+  // --- auto-advance within the current result list ---
+  useEffect(() => {
+    const unsub = provider.onTrackEnded(() => {
+      if (currentResultIndex >= 0 && currentResultIndex < results.length - 1) {
+        void playTrack(results[currentResultIndex + 1], currentResultIndex + 1);
+      }
+    });
+    return unsub;
+    // playTrack is stable enough for this subscription's lifetime per provider
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, results, currentResultIndex]);
+
+  const handleSearch = async () => {
+    const q = query.trim();
+    if (!q) return;
+    setSearching(true);
+    setError(null);
+    try {
+      const found = await provider.search(q, 15);
+      setResults(found);
+      if (found.length === 0) {
+        setError('No songs found for that search.');
+      }
+    } catch (err) {
+      setResults([]);
+      setError(
+        err instanceof ProviderError || err instanceof Error
+          ? err.message
+          : 'Search failed.'
+      );
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const playTrack = async (track: CanonicalTrack, index: number) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await provider.playTrack(track, 0);
+      setCurrent(track);
+      setCurrentResultIndex(index);
+      const snap = await provider.getSnapshot();
+      setSnapshot(snap);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'That track could not be played.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleToggle = async () => {
+    if (!current) return;
+    try {
+      if (snapshot?.isPlaying) {
+        await provider.pause();
+      } else {
+        await provider.resume();
+      }
+      setSnapshot(await provider.getSnapshot());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Playback control failed.');
+    }
+  };
+
+  const handleSkip = async (delta: number) => {
+    const next = currentResultIndex + delta;
+    if (next < 0 || next >= results.length) return;
+    await playTrack(results[next], next);
+    if (delta > 0) props.onNextTrack();
+    else props.onPrevTrack();
+  };
+
+  const handleConnect = async () => {
+    setError(null);
+    try {
+      const state = await appleMusicProvider.connect();
+      setAppleAuth(state);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Apple Music connect failed.');
+    }
+  };
+
+  const handleDisconnect = async () => {
+    try {
+      await provider.disconnect();
+      const state = await provider.getAuthState();
+      setAppleAuth(state);
+      if (current && snapshot?.trackKey) {
+        setCurrent(null);
+        setSnapshot(null);
+      }
+    } catch {
+      // Disconnect is best-effort; local state was already cleared.
+    }
+  };
+
+  const positionMs = snapshot?.positionMs ?? 0;
+  const durationMs =
+    snapshot?.durationMs ?? current?.durationMs ?? 0;
+  const progressRatio =
+    durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
 
   return (
-    <View style={styles.card}>
-      {/* Header */}
+    <View style={styles.root}>
+      {/* header + provider switch */}
       <View style={styles.headerRow}>
-        <View style={styles.brandRow}>
-          <View style={styles.musicIconBox}>
-            <Music2 size={16} color="#1DB954" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <View style={styles.badgeRow}>
-              <Text style={styles.spotifyLabel}>
-                SPOTIFY PACK SYNC · BROADCAST API
+        <Music2 size={16} color={accent} />
+        <Text style={[styles.headerLabel, { color: accent }]}>
+          MUSIC · APPLE MUSIC
+        </Text>
+      </View>
+      {/* connection card */}
+      <View style={styles.card}>
+        {activeAuth?.isConnected ? (
+          <>
+            <View style={styles.connectRow}>
+              <CheckCircle2 size={16} color='#34D399' />
+              <Text style={styles.connectTitle}>
+                {activeAuth.userDisplayName ?? 'Connected'}
               </Text>
-              <View style={styles.bpmBadge}>
-                <Text style={styles.bpmBadgeText}>
-                  {currentTrack.bpm} BPM LOCKED
-                </Text>
-              </View>
             </View>
-            <Text style={styles.deckTitle}>
-              Synchronized Cadence Music Stream
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.headerActions}>
+            <Pressable onPress={handleDisconnect} style={styles.linkBtn}>
+              <Text style={styles.linkBtnText}>Disconnect</Text>
+            </Pressable>
+          </>
+        ) : (
           <Pressable
-            onPress={onForceResyncBroadcast}
-            style={styles.resyncBtn}
+            onPress={handleConnect}
+            style={[styles.connectBtn, { backgroundColor: accent }]}
           >
-            <RefreshCw size={13} color="#1DB954" />
-            <Text style={styles.resyncBtnText}>Broadcast Sync</Text>
-          </Pressable>
-
-          <Pressable
-            onPress={() => setShowApiTranslator((v) => !v)}
-            style={[
-              styles.translatorToggleBtn,
-              showApiTranslator && styles.translatorToggleBtnActive,
-            ]}
-          >
-            <Code2
-              size={13}
-              color={showApiTranslator ? '#D4FF00' : '#94A3B8'}
-            />
-            <Text
-              style={[
-                styles.translatorToggleText,
-                showApiTranslator && { color: '#D4FF00' },
-              ]}
-            >
-              API Translator
+            <Text style={styles.connectBtnText}>
+              {appleMusicProvider.canUseMusicKit()
+                ? 'Connect Apple Music account'
+                : 'Use Apple Music catalog'}
             </Text>
           </Pressable>
-        </View>
+        )}
+        <Text style={styles.noteText}>{provider.capabilities.playbackNote}</Text>
       </View>
 
-      {/* Now Playing Card + Controls */}
-      <View style={styles.nowPlayingBox}>
-        <View style={styles.trackMainRow}>
-          <View style={styles.coverWrap}>
-            <Image
-              source={{ uri: currentTrack.coverUrl }}
-              style={styles.coverImg}
-            />
-            <View style={styles.coverBpmTag}>
-              <Text style={styles.coverBpmTagText}>
-                {currentTrack.bpm} BPM
-              </Text>
-            </View>
+      {/* search */}
+      <View style={styles.card}>
+        <View style={styles.searchRow}>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={handleSearch}
+            placeholder={
+              'Search Apple Music (song or artist)...'
+            }
+            placeholderTextColor='#6B7280'
+            style={styles.searchInput}
+            returnKeyType='search'
+          />
+          <Pressable
+            onPress={handleSearch}
+            style={[styles.searchBtn, { backgroundColor: accent }]}
+          >
+            <Text style={styles.searchBtnText}>
+              {searching ? '...' : 'Search'}
+            </Text>
+          </Pressable>
+        </View>
+        {error && (
+          <View style={styles.errorRow}>
+            <AlertTriangle size={14} color='#FBBF24' />
+            <Text style={styles.errorText}>{error}</Text>
           </View>
-
-          <View style={{ flex: 1, gap: 4 }}>
-            <View style={styles.trackTitleRow}>
-              <Text style={styles.trackTitle} numberOfLines={1}>
-                {currentTrack.title}
-              </Text>
-              <View
-                style={[
-                  styles.volTag,
-                  isVoiceDucked && styles.volTagDucked,
-                ]}
-              >
-                <Volume2
-                  size={11}
-                  color={isVoiceDucked ? '#FF4D2A' : '#CBD5E1'}
-                />
-                <Text
-                  style={[
-                    styles.volTagText,
-                    isVoiceDucked && { color: '#FF4D2A' },
-                  ]}
-                >
-                  {isVoiceDucked ? 'DUCKED 25%' : 'VOL 100%'}
+        )}
+        {results.map((item, index) => {
+          const key =
+            item.providerIds[providerId] ?? `${item.title}-${index}`;
+          const isCurrent =
+            current?.providerIds[providerId] !== undefined &&
+            current.providerIds[providerId] === item.providerIds[providerId];
+          return (
+            <Pressable
+              key={key}
+              onPress={() => playTrack(item, index)}
+              style={[styles.resultRow, isCurrent && styles.resultRowActive]}
+            >
+              {item.artworkUrl ? (
+                <Image source={{ uri: item.artworkUrl }} style={styles.artwork} />
+              ) : (
+                <View style={[styles.artwork, styles.artworkPlaceholder]}>
+                  <Music2 size={16} color='#9CA3AF' />
+                </View>
+              )}
+              <View style={styles.resultMeta}>
+                <Text style={styles.resultTitle} numberOfLines={1}>
+                  {item.title}
+                  {item.explicit ? '  (E)' : ''}
+                </Text>
+                <Text style={styles.resultArtist} numberOfLines={1}>
+                  {item.artist} · {formatTime(item.durationMs)}
                 </Text>
               </View>
-            </View>
-
-            <Text style={styles.trackArtist} numberOfLines={1}>
-              {currentTrack.artist} ·{' '}
-              <Text style={{ color: '#64748B' }}>{currentTrack.album}</Text>
-            </Text>
-
-            {/* Interactive Scrubber Bar */}
-            <Pressable
-              onLayout={(e) => {
-                const w = e.nativeEvent.layout.width;
-                if (w > 0) setBarWidth(w);
-              }}
-              onPress={(e) => {
-                const x = e.nativeEvent.locationX;
-                if (typeof x === 'number' && barWidth > 0) {
-                  const ratio = Math.max(0, Math.min(1, x / barWidth));
-                  onSeekTrack(Math.round(ratio * currentTrack.durationSec));
-                }
-              }}
-              style={styles.scrubberOuter}
-            >
-              <View
-                style={[
-                  styles.scrubberFill,
-                  { width: `${pctPlayed}%` },
-                ]}
-              />
-            </Pressable>
-
-            <View style={styles.scrubberMetaRow}>
-              <Text style={styles.scrubberTime}>
-                {formatTrackTime(progressSec)}
-              </Text>
-              <Text style={styles.scrubberUri} numberOfLines={1}>
-                {currentTrack.uri}
-              </Text>
-              <Text style={styles.scrubberTime}>
-                {formatTrackTime(currentTrack.durationSec)}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Playback Controls + Track Queue Selector */}
-        <View style={styles.controlsBar}>
-          <View style={styles.transportRow}>
-            <Pressable onPress={onPrevTrack} style={styles.skipBtn}>
-              <SkipBack size={15} color="#FFFFFF" />
-            </Pressable>
-
-            <Pressable onPress={onTogglePlay} style={styles.playPauseBtn}>
-              {isPlaying ? (
-                <>
-                  <Pause size={15} color="#080B10" />
-                  <Text style={styles.playPauseText}>Pause Pack</Text>
-                </>
+              {isCurrent && snapshot?.isPlaying ? (
+                <Pause size={18} color={accent} />
               ) : (
-                <>
-                  <Play size={15} color="#080B10" />
-                  <Text style={styles.playPauseText}>Sync Play</Text>
-                </>
+                <Play size={18} color={isCurrent ? accent : '#9CA3AF'} />
               )}
             </Pressable>
-
-            <Pressable onPress={onNextTrack} style={styles.skipBtn}>
-              <SkipForward size={15} color="#FFFFFF" />
-            </Pressable>
-
-            <Pressable
-              onPress={() =>
-                onSeekTrack(
-                  Math.min(currentTrack.durationSec - 5, progressSec + 30)
-                )
-              }
-              style={styles.seekJumpBtn}
-            >
-              <Text style={styles.seekJumpText}>+30s Seek</Text>
-            </Pressable>
-          </View>
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.bpmPillsRow}
-          >
-            {tracks.map((t, idx) => {
-              const active = idx === currentTrackIndex;
-              return (
-                <Pressable
-                  key={t.id}
-                  onPress={() => onSelectTrackIndex(idx)}
-                  style={[
-                    styles.bpmTrackPill,
-                    active && styles.bpmTrackPillActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.bpmTrackPillText,
-                      active && styles.bpmTrackPillTextActive,
-                    ]}
-                  >
-                    {t.bpm} BPM · {t.title.split(' ')[0]}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
+          );
+        })}
       </View>
 
-      {/* Per-User Drift Status Row */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.driftScroll}
-      >
-        {athletes.map((ath) => (
-          <View key={ath.id} style={styles.driftChip}>
-            <View style={styles.driftDot} />
-            <Text style={styles.driftName}>
-              {ath.isSelf ? 'You' : ath.name.split(' ')[0]}
-            </Text>
-            <Text style={styles.driftMs}>
-              {ath.isSelf ? 'HOST' : `+${ath.spotifyDriftMs}ms`}
-            </Text>
-          </View>
-        ))}
-      </ScrollView>
-
-      {/* CUSTOM API BROADCAST -> CLIENT SPOTIFY API TRANSLATOR INSPECTOR */}
-      {showApiTranslator && latestSignal && (
-        <View style={styles.translatorBox}>
-          <View style={styles.translatorHeader}>
-            <View style={styles.translatorTitleWrap}>
-              <Cpu size={13} color="#D4FF00" />
-              <Text style={styles.translatorTitle}>
-                Custom Broadcast -&gt; Client Spotify API Translator
-              </Text>
-            </View>
-            <View style={styles.peersBadge}>
-              <CheckCircle2 size={12} color="#34D399" />
-              <Text style={styles.peersBadgeText}>
-                {latestSignal.peersTranslated}/5 Peers ({latestSignal.avgDriftMs}
-                ms)
-              </Text>
-            </View>
-          </View>
-
-          {/* 3-Step Visual Pipeline */}
-          <View style={styles.pipelineGrid}>
-            <View style={styles.pipelineCard}>
-              <Text style={[styles.pipelineStepTitle, { color: '#D4FF00' }]}>
-                1. CUSTOM APP BROADCAST
-              </Text>
-              <Text style={styles.pipelineEndpoint} numberOfLines={1}>
-                {latestSignal.customEndpoint}
-              </Text>
-              <Text style={styles.pipelineMeta}>
-                action:{' '}
-                <Text style={{ color: '#FFFFFF' }}>{latestSignal.action}</Text>
-              </Text>
-              <Text style={styles.pipelineMeta}>
-                pos_ms:{' '}
-                <Text style={{ color: '#FFFFFF' }}>
-                  {latestSignal.customPayload.position_ms}
-                </Text>
-              </Text>
-            </View>
-
-            <View style={styles.pipelineCard}>
-              <View style={styles.pipelineStepRow}>
-                <Text style={[styles.pipelineStepTitle, { color: '#00F0FF' }]}>
-                  2. SUPABASE REALTIME
-                </Text>
-                <ArrowRight size={12} color="#00F0FF" />
+      {/* now playing */}
+      {current && (
+        <View style={styles.card}>
+          <View style={styles.nowRow}>
+            {current.artworkUrl ? (
+              <Image
+                source={{ uri: current.artworkUrl }}
+                style={styles.nowArtwork}
+              />
+            ) : (
+              <View style={[styles.nowArtwork, styles.artworkPlaceholder]}>
+                <Music2 size={20} color='#9CA3AF' />
               </View>
-              <Text style={styles.pipelineEndpoint}>
-                Channel: <Text style={{ color: '#FFFFFF' }}>session:sf-884</Text>
+            )}
+            <View style={styles.resultMeta}>
+              <Text style={styles.nowTitle} numberOfLines={1}>
+                {current.title}
               </Text>
-              <Text style={styles.pipelineMeta}>
-                Each phone receives broadcast &amp; adds RTT offset (+
-                {latestSignal.clientSpotifyBody.device_compensation_ms}ms)
+              <Text style={styles.resultArtist} numberOfLines={1}>
+                {current.artist}
+              </Text>
+              <Text style={styles.kindLabel}>
+                {snapshot?.kind
+                  ? KIND_LABELS[snapshot.kind]
+                  : busy
+                    ? 'Loading...'
+                    : 'Ready'}
               </Text>
             </View>
-
+            {isVoiceDucked && snapshot?.kind === 'preview' && (
+              <Volume2 size={16} color='#FBBF24' />
+            )}
+          </View>
+          <Pressable
+            onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
+            onPress={(e) => {
+              if (durationMs <= 0 || barWidth <= 0) return;
+              const ratio = Math.max(
+                0,
+                Math.min(1, e.nativeEvent.locationX / barWidth)
+              );
+              void provider.seek(ratio * durationMs);
+              props.onSeekTrack((ratio * durationMs) / 1000);
+            }}
+            style={styles.progressTrack}
+          >
             <View
               style={[
-                styles.pipelineCard,
-                { borderColor: 'rgba(29, 185, 84, 0.45)' },
+                styles.progressFill,
+                { width: `${progressRatio * 100}%`, backgroundColor: accent },
               ]}
+            />
+          </Pressable>
+          <View style={styles.timeRow}>
+            <Text style={styles.timeText}>{formatTime(positionMs)}</Text>
+            <Text style={styles.timeText}>{formatTime(durationMs)}</Text>
+          </View>
+          <View style={styles.controlsRow}>
+            <Pressable
+              onPress={() => handleSkip(-1)}
+              disabled={currentResultIndex <= 0}
+              style={styles.controlBtn}
             >
-              <Text style={[styles.pipelineStepTitle, { color: '#1DB954' }]}>
-                3. PEER SPOTIFY API CALL
-              </Text>
-              <Text style={styles.pipelineEndpoint} numberOfLines={1}>
-                {latestSignal.clientSpotifyEndpoint}
-              </Text>
-              <Text style={styles.pipelineMeta} numberOfLines={1}>
-                uri:{' '}
-                <Text style={{ color: '#FFFFFF' }}>
-                  {latestSignal.clientSpotifyBody.uris[0]}
-                </Text>
-              </Text>
-              <Text style={styles.pipelineMeta}>
-                seek_ms:{' '}
-                <Text style={{ color: '#1DB954', fontWeight: '700' }}>
-                  {latestSignal.clientSpotifyBody.position_ms}
-                </Text>
-              </Text>
-            </View>
+              <SkipBack
+                size={22}
+                color={currentResultIndex <= 0 ? '#4B5563' : '#E5E7EB'}
+              />
+            </Pressable>
+            <Pressable onPress={handleToggle} style={styles.playBtn}>
+              {snapshot?.isPlaying ? (
+                <Pause size={26} color='#080B10' />
+              ) : (
+                <Play size={26} color='#080B10' />
+              )}
+            </Pressable>
+            <Pressable
+              onPress={() => handleSkip(1)}
+              disabled={currentResultIndex >= results.length - 1}
+              style={styles.controlBtn}
+            >
+              <SkipForward
+                size={22}
+                color={
+                  currentResultIndex >= results.length - 1
+                    ? '#4B5563'
+                    : '#E5E7EB'
+                }
+              />
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                if (current) void playTrack(current, currentResultIndex);
+              }}
+              style={styles.controlBtn}
+            >
+              <RefreshCw size={18} color='#9CA3AF' />
+            </Pressable>
           </View>
         </View>
       )}
-
-      {/* Footer status */}
-      <View style={styles.footerRow}>
-        <View style={styles.footerItem}>
-          <Activity size={13} color="#1DB954" />
-          <Text style={styles.footerText}>
-            Spotify OAuth Tokens via Supabase `users` table
-          </Text>
-        </View>
-        <Text style={styles.footerText}>
-          Last: {latestSignal?.timestamp}
-        </Text>
-      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { gap: 12 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerLabel: { fontFamily: MONO_FONT, fontSize: 12, letterSpacing: 1.5 },
+  pillsRow: { flexDirection: 'row', gap: 8 },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  pillDot: { width: 8, height: 8, borderRadius: 4 },
+  pillText: { color: '#E5E7EB', fontSize: 13, fontWeight: '600' },
   card: {
-    backgroundColor: '#0E131D',
-    borderRadius: 18,
+    backgroundColor: '#0D1117',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 14,
+    padding: 14,
+    gap: 10,
+  },
+  connectRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  connectTitle: { color: '#E5E7EB', fontSize: 14, fontWeight: '600', flex: 1 },
+  badge: {
+    color: '#34D399',
+    fontFamily: MONO_FONT,
+    fontSize: 10,
+    letterSpacing: 1,
+  },
+  badgeWarn: { color: '#FBBF24' },
+  linkBtn: { alignSelf: 'flex-start' },
+  linkBtnText: { color: '#9CA3AF', fontSize: 12, textDecorationLine: 'underline' },
+  connectBtn: { borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  connectBtnText: { color: '#080B10', fontSize: 14, fontWeight: '700' },
+  noteText: { color: '#9CA3AF', fontSize: 12, lineHeight: 17 },
+  warnText: { color: '#FBBF24' },
+  searchRow: { flexDirection: 'row', gap: 8 },
+  searchInput: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
-    padding: 14,
-    gap: 12,
+    borderRadius: 10,
+    color: '#F3F4F6',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
   },
-  headerRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
-  },
-  musicIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
-    backgroundColor: 'rgba(29, 185, 84, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(29, 185, 84, 0.4)',
+  searchBtn: {
+    borderRadius: 10,
+    paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  badgeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 6,
-  },
-  spotifyLabel: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    fontWeight: '800',
-    color: '#1DB954',
-    letterSpacing: 0.5,
-  },
-  bpmBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: 'rgba(29, 185, 84, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(29, 185, 84, 0.35)',
-  },
-  bpmBadgeText: {
-    fontSize: 9,
-    fontFamily: MONO_FONT,
-    fontWeight: '700',
-    color: '#1DB954',
-  },
-  deckTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    marginTop: 2,
-  },
-  headerActions: {
+  searchBtnText: { color: '#080B10', fontSize: 13, fontWeight: '700' },
+  errorRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  errorText: { color: '#FCD34D', fontSize: 12, lineHeight: 17, flex: 1 },
+  resultRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 10,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.05)',
   },
-  resyncBtn: {
-    flexDirection: 'row',
+  resultRowActive: { backgroundColor: 'rgba(255,255,255,0.04)' },
+  artwork: { width: 44, height: 44, borderRadius: 8 },
+  artworkPlaceholder: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
     alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
-    backgroundColor: 'rgba(29, 185, 84, 0.2)',
-    borderWidth: 1,
-    borderColor: 'rgba(29, 185, 84, 0.5)',
+    justifyContent: 'center',
   },
-  resyncBtnText: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    fontWeight: '700',
-    color: '#1DB954',
-  },
-  translatorToggleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-  },
-  translatorToggleBtnActive: {
-    backgroundColor: 'rgba(212, 255, 0, 0.15)',
-    borderColor: 'rgba(212, 255, 0, 0.5)',
-  },
-  translatorToggleText: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    fontWeight: '700',
-    color: '#94A3B8',
-  },
-  nowPlayingBox: {
-    backgroundColor: '#080B10',
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    gap: 12,
-  },
-  trackMainRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  coverWrap: {
-    position: 'relative',
-  },
-  coverImg: {
-    width: 62,
-    height: 62,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-  },
-  coverBpmTag: {
-    position: 'absolute',
-    bottom: -4,
-    right: -4,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: '#1DB954',
-  },
-  coverBpmTagText: {
-    fontSize: 8,
-    fontFamily: MONO_FONT,
-    fontWeight: '800',
-    color: '#080B10',
-  },
-  trackTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
-  },
-  trackTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    flex: 1,
-  },
-  volTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+  resultMeta: { flex: 1, gap: 2 },
+  resultTitle: { color: '#F3F4F6', fontSize: 14, fontWeight: '600' },
+  resultArtist: { color: '#9CA3AF', fontSize: 12 },
+  nowRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  nowArtwork: { width: 56, height: 56, borderRadius: 10 },
+  nowTitle: { color: '#F3F4F6', fontSize: 15, fontWeight: '700' },
+  kindLabel: { color: '#9CA3AF', fontFamily: MONO_FONT, fontSize: 10 },
+  progressTrack: {
+    height: 10,
     borderRadius: 5,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-  },
-  volTagDucked: {
-    backgroundColor: 'rgba(255, 77, 42, 0.2)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 77, 42, 0.45)',
-  },
-  volTagText: {
-    fontSize: 9,
-    fontFamily: MONO_FONT,
-    fontWeight: '700',
-    color: '#CBD5E1',
-  },
-  trackArtist: {
-    fontSize: 11,
-    color: '#94A3B8',
-  },
-  scrubberOuter: {
-    height: 8,
-    width: '100%',
-    borderRadius: 999,
-    backgroundColor: '#1E293B',
+    backgroundColor: 'rgba(255,255,255,0.08)',
     overflow: 'hidden',
-    marginTop: 4,
+    justifyContent: 'center',
   },
-  scrubberFill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: '#1DB954',
-  },
-  scrubberMetaRow: {
+  progressFill: { height: 4, borderRadius: 2 },
+  timeRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  timeText: { color: '#6B7280', fontFamily: MONO_FONT, fontSize: 11 },
+  controlsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
+    justifyContent: 'center',
+    gap: 22,
   },
-  scrubberTime: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    color: '#94A3B8',
-  },
-  scrubberUri: {
-    fontSize: 9,
-    fontFamily: MONO_FONT,
-    color: '#1DB954',
-    flex: 1,
-    textAlign: 'center',
-  },
-  controlsBar: {
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.08)',
-    gap: 10,
-  },
-  transportRow: {
-    flexDirection: 'row',
+  controlBtn: { padding: 6 },
+  playBtn: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#D4FF00',
     alignItems: 'center',
-    gap: 8,
-  },
-  skipBtn: {
-    padding: 9,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-  },
-  playPauseBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 11,
-    backgroundColor: '#1DB954',
-  },
-  playPauseText: {
-    fontSize: 11,
-    fontFamily: MONO_FONT,
-    fontWeight: '800',
-    color: '#080B10',
-    textTransform: 'uppercase',
-  },
-  seekJumpBtn: {
-    marginLeft: 'auto',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-  },
-  seekJumpText: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    fontWeight: '700',
-    color: '#CBD5E1',
-  },
-  bpmPillsRow: {
-    gap: 6,
-  },
-  bpmTrackPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  bpmTrackPillActive: {
-    backgroundColor: 'rgba(29, 185, 84, 0.2)',
-    borderColor: '#1DB954',
-  },
-  bpmTrackPillText: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    color: '#94A3B8',
-  },
-  bpmTrackPillTextActive: {
-    color: '#1DB954',
-    fontWeight: '700',
-  },
-  driftScroll: {
-    gap: 6,
-  },
-  driftChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: '#080B10',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  driftDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#1DB954',
-  },
-  driftName: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#CBD5E1',
-  },
-  driftMs: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    fontWeight: '700',
-    color: '#1DB954',
-  },
-  translatorBox: {
-    backgroundColor: '#080B10',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 255, 0, 0.32)',
-    gap: 10,
-  },
-  translatorHeader: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
-  },
-  translatorTitleWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  translatorTitle: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    fontWeight: '700',
-    color: '#D4FF00',
-    textTransform: 'uppercase',
-  },
-  peersBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  peersBadgeText: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    color: '#34D399',
-  },
-  pipelineGrid: {
-    gap: 8,
-  },
-  pipelineCard: {
-    padding: 10,
-    borderRadius: 10,
-    backgroundColor: '#111726',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    gap: 3,
-  },
-  pipelineStepRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  pipelineStepTitle: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    fontWeight: '800',
-  },
-  pipelineEndpoint: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    color: '#CBD5E1',
-  },
-  pipelineMeta: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    color: '#94A3B8',
-  },
-  footerRow: {
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.08)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  footerItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  footerText: {
-    fontSize: 10,
-    fontFamily: MONO_FONT,
-    color: '#94A3B8',
+    justifyContent: 'center',
   },
 });

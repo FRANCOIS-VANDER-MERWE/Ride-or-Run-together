@@ -40,7 +40,9 @@
       "expo-sqlite",
       "expo-font",
       "expo-asset",
-      "expo-secure-store"
+      "expo-audio",
+      "expo-secure-store",
+      "expo-web-browser"
     ]
   }
 }
