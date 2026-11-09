@@ -155,9 +155,22 @@ create policy routes_delete on public.routes
 
 -- ---------- ride_sessions ----------
 drop policy if exists ride_sessions_select on public.ride_sessions;
+-- NOTE: this policy deliberately does NOT call can_view_session().
+-- That helper queries ride_sessions itself, and during an
+-- INSERT ... RETURNING (what supabase-js .insert().select() sends) the
+-- just-inserted row is not yet visible to a same-table query inside a
+-- policy, so the visibility check failed and Postgres reported the
+-- whole insert as an RLS violation. Direct column checks below are
+-- evaluated against the actual row, and the two helpers query other
+-- tables, so inserts with RETURNING pass.
 create policy ride_sessions_select on public.ride_sessions
   for select to authenticated
-  using (public.can_view_session(session_id));
+  using (
+    visibility in ('public', 'friends')
+    or host_id = auth.uid()
+    or public.is_session_participant(session_id)
+    or public.has_session_invite(session_id)
+  );
 drop policy if exists ride_sessions_insert on public.ride_sessions;
 create policy ride_sessions_insert on public.ride_sessions
   for insert to authenticated with check (host_id = auth.uid());
