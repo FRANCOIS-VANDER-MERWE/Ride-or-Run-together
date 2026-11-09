@@ -785,6 +785,7 @@ export default function PackDeck() {
                     onPress={() =>
                       void run(async () => {
                         await setSessionStatus(session.session_id, 'active');
+                        setActiveSession({ ...session, status: 'active' });
                       }, 'Session is live.')
                     }
                   >
@@ -875,7 +876,9 @@ export default function PackDeck() {
                 onPress={() =>
                   void run(async () => {
                     await respondToInvite(invite, 'accepted');
-                  }, 'Invite accepted. You are in.')
+                    const joined = inviteSessions[invite.session_id];
+                    if (joined) setActiveSession(joined);
+                  }, 'Invite accepted. You are in, and this is your active session.')
                 }
               >
                 <Text style={styles.smallBtnText}>Accept</Text>

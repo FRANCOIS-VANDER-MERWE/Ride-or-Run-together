@@ -53,7 +53,17 @@ import {
 import { audioEngine } from '../music/audioEngine';
 import { useAuth } from '../auth/AuthProvider';
 import { useActiveSession } from '../session/ActiveSessionContext';
-import { publishNowPlaying, updatePlaybackState } from '../services/musicDataService';
+import {
+  fetchPlaybackState,
+  fetchSessionQueueWithTracks,
+  publishNowPlaying,
+  updatePlaybackState,
+} from '../services/musicDataService';
+import {
+  subscribeToTableChanges,
+  supabase,
+} from '../services/supabaseClient';
+import type { SessionPlaybackStateRow } from '../services/database.types';
 import { appleMusicProvider } from '../music/providers/AppleMusicProvider';
 import {
   AuthState,
@@ -118,6 +128,13 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
   const auth = useAuth();
   const { activeSession } = useActiveSession();
   const lastPublishedRef = useRef<string | null>(null);
+  const suppressPublishRef = useRef(false);
+  const followedItemRef = useRef<string | null>(null);
+  const followBusyRef = useRef(false);
+  const [packSyncError, setPackSyncError] = useState<string | null>(null);
+  const [lastPublishedTitle, setLastPublishedTitle] = useState<string | null>(
+    null
+  );
   const publishToPack = (track: CanonicalTrack) => {
     const sessionId = activeSession?.session_id;
     const userId = auth.user?.id;
@@ -135,9 +152,19 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
       album: track.album ?? undefined,
       durationMs: track.durationMs ?? undefined,
       artworkUrl: track.artworkUrl ?? undefined,
-    }).catch(() => {
-      lastPublishedRef.current = null;
-    });
+    })
+      .then(() => {
+        setPackSyncError(null);
+        setLastPublishedTitle(track.title);
+      })
+      .catch((err: unknown) => {
+        lastPublishedRef.current = null;
+        setPackSyncError(
+          err instanceof Error
+            ? err.message.replace('[Supabase] ', '')
+            : 'Pack sync failed.'
+        );
+      });
   };
   const provider = appleMusicProvider;
   const accent = PROVIDER_COLORS[providerId];
@@ -239,7 +266,11 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
     try {
       await provider.playTrack(track, 0);
       setCurrent(track);
-      publishToPack(track);
+      if (suppressPublishRef.current) {
+        suppressPublishRef.current = false;
+      } else {
+        publishToPack(track);
+      }
       setCurrentResultIndex(index);
       const snap = await provider.getSnapshot();
       setSnapshot(snap);
@@ -251,6 +282,108 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
       setBusy(false);
     }
   };
+
+  const playTrackRef = useRef(playTrack);
+  useEffect(() => {
+    playTrackRef.current = playTrack;
+  });
+
+  // --- follower playback: when someone else is the DJ, this device
+  // plays what the shared playback state points at ---
+  const activeSessionId = activeSession?.session_id ?? null;
+  const myUserId = auth.user?.id ?? null;
+  const appleConnected = !!activeAuth?.isConnected;
+  useEffect(() => {
+    if (!activeSessionId || !myUserId || !appleConnected) return;
+    let live = true;
+    const handleState = async (
+      row: SessionPlaybackStateRow | null,
+      fromInitialFetch: boolean
+    ) => {
+      if (!live || !row) return;
+      if (row.dj_user_id === myUserId) return;
+      if (!row.current_item_id) return;
+      if (
+        fromInitialFetch &&
+        row.position_updated_at &&
+        Date.now() - new Date(row.position_updated_at).getTime() > 10 * 60 * 1000
+      ) {
+        return; // stale state from an earlier ride; do not autoplay it
+      }
+      if (row.current_item_id !== followedItemRef.current) {
+        if (followBusyRef.current) return;
+        followBusyRef.current = true;
+        try {
+          const entries = await fetchSessionQueueWithTracks(activeSessionId);
+          const entry = entries.find(
+            (e) => e.item.queue_item_id === row.current_item_id
+          );
+          const track = entry?.track ?? null;
+          if (!track || track.provider !== 'apple_music') return;
+          const pid = track.provider_track_id;
+          if (pid.startsWith('isrc:') || pid.startsWith('manual-')) {
+            followedItemRef.current = row.current_item_id;
+            setPackSyncError(
+              `The pack is playing ${track.title}, but this device cannot resolve it to an Apple Music track.`
+            );
+            return;
+          }
+          const canonical: CanonicalTrack = {
+            isrc: '',
+            title: track.title,
+            artist: track.artist,
+            album: track.album ?? undefined,
+            artworkUrl: track.artwork_url ?? undefined,
+            durationMs: track.duration_ms ?? 0,
+            bpm: null,
+            providerIds: { apple: pid },
+          };
+          followedItemRef.current = row.current_item_id;
+          suppressPublishRef.current = true;
+          await playTrackRef.current(canonical, -1);
+          if (!row.is_playing) {
+            await provider.pause().catch(() => {});
+            setSnapshot(await provider.getSnapshot().catch(() => null));
+          }
+        } catch (err) {
+          setPackSyncError(
+            err instanceof Error ? err.message : 'Pack playback failed.'
+          );
+        } finally {
+          followBusyRef.current = false;
+        }
+      } else {
+        try {
+          const snap = await provider.getSnapshot();
+          if (row.is_playing && snap && !snap.isPlaying) {
+            await provider.resume();
+            setSnapshot(await provider.getSnapshot());
+          } else if (!row.is_playing && snap?.isPlaying) {
+            await provider.pause();
+            setSnapshot(await provider.getSnapshot());
+          }
+        } catch {
+          // Snapshot races while following are harmless.
+        }
+      }
+    };
+    void fetchPlaybackState(activeSessionId)
+      .then((row) => handleState(row, true))
+      .catch(() => {});
+    const channel = subscribeToTableChanges('session_playback_state', {
+      sessionId: activeSessionId,
+      onChange: (payload) => {
+        void handleState(
+          payload.new as unknown as SessionPlaybackStateRow,
+          false
+        );
+      },
+    });
+    return () => {
+      live = false;
+      if (channel && supabase) void supabase.removeChannel(channel);
+    };
+  }, [activeSessionId, myUserId, appleConnected]);
 
   const handleToggle = async () => {
     if (!current) return;
@@ -331,6 +464,13 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
           play here will queue for the group.
         </Text>
       )}
+      {packSyncError ? (
+        <Text style={styles.packError}>Pack sync: {packSyncError}</Text>
+      ) : lastPublishedTitle && activeSession ? (
+        <Text style={styles.packLineMuted}>
+          Queued for the pack: {lastPublishedTitle}
+        </Text>
+      ) : null}
       {/* connection card */}
       <View style={styles.card}>
         {activeAuth?.isConnected ? (
@@ -540,6 +680,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#34D399',
     marginTop: 6,
+    lineHeight: 15,
+  },
+  packError: {
+    fontFamily: MONO_FONT,
+    fontSize: 11,
+    color: '#F87171',
+    marginTop: 4,
     lineHeight: 15,
   },
   packLineMuted: {

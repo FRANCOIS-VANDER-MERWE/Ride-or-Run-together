@@ -74,6 +74,10 @@ export type TableChangeEvent = 'INSERT' | 'UPDATE' | 'DELETE' | '*';
  * to be in the supabase_realtime publication, which
  * supabase/rls_policies.sql sets up for the session tables.
  */
+// Each call gets a unique channel topic (see the suffix in the topic
+// below): supabase-js dedupes channels by topic, so two subscribers to
+// the same table and session would otherwise share one channel and a
+// binding can go missing.
 export function subscribeToTableChanges(
   table: keyof Database['public']['Tables'],
   options: {
@@ -92,7 +96,7 @@ export function subscribeToTableChanges(
     : undefined;
   const channel = supabase
     .channel(
-      `db-${String(table)}${options.sessionId ? `-${options.sessionId}` : ''}`
+      `db-${String(table)}${options.sessionId ? `-${options.sessionId}` : ''}-${Math.random().toString(36).slice(2, 8)}`
     )
     .on(
       'postgres_changes' as never,
