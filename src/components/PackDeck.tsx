@@ -12,7 +12,7 @@
  * It renders inside the app shell's ScrollView, so it owns no scroll
  * container of its own.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -53,6 +53,14 @@ import {
   fetchProfile,
   searchProfilesByUsername,
 } from '../services/profilesService';
+import { fetchLatestPings } from '../services/rideDataService';
+import {
+  startLocationSharing,
+  subscribeToLocationFixes,
+  type LiveFix,
+  type LocationSharingHandle,
+} from '../services/liveLocationService';
+import { releaseLocationChannel } from '../services/liveLocationService';
 
 const ACCENT = '#34D399';
 const BG = '#080B10';
@@ -85,6 +93,12 @@ export default function PackDeck() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [participants, setParticipants] = useState<SessionParticipantRow[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
+
+  const [sharing, setSharing] = useState(false);
+  const sharingHandleRef = useRef<LocationSharingHandle | null>(null);
+  const fixesUnsubRef = useRef<(() => void) | null>(null);
+  const liveSessionRef = useRef<string | null>(null);
+  const [liveFixes, setLiveFixes] = useState<Record<string, LiveFix>>({});
 
   const [newTitle, setNewTitle] = useState('');
   const [newVisibility, setNewVisibility] =
@@ -140,11 +154,87 @@ export default function PackDeck() {
     }
   };
 
+  const stopLive = useCallback(async () => {
+    if (sharingHandleRef.current) {
+      await sharingHandleRef.current.stop();
+      sharingHandleRef.current = null;
+    }
+    setSharing(false);
+    if (fixesUnsubRef.current) {
+      fixesUnsubRef.current();
+      fixesUnsubRef.current = null;
+    }
+    if (liveSessionRef.current) {
+      await releaseLocationChannel(liveSessionRef.current);
+      liveSessionRef.current = null;
+    }
+    setLiveFixes({});
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void stopLive();
+    };
+  }, [stopLive]);
+
+  const startLiveView = useCallback(
+    async (session: RideSessionRow) => {
+      if (session.status !== 'active') return;
+      try {
+        const latest = await fetchLatestPings(session.session_id);
+        const initial: Record<string, LiveFix> = {};
+        for (const [userId, ping] of latest) {
+          initial[userId] = {
+            userId,
+            lat: ping.location.coordinates[1],
+            lng: ping.location.coordinates[0],
+            speedMps: ping.speed_mps,
+            headingDeg: ping.heading_deg,
+            recordedAt: ping.recorded_at,
+          };
+        }
+        setLiveFixes(initial);
+      } catch {
+        // Catch-up is best effort; live fixes still arrive.
+      }
+      liveSessionRef.current = session.session_id;
+      fixesUnsubRef.current = subscribeToLocationFixes(
+        session.session_id,
+        (fix) => {
+          setLiveFixes((prev) => ({ ...prev, [fix.userId]: fix }));
+        }
+      );
+    },
+    []
+  );
+
+  const toggleSharing = async (session: RideSessionRow) => {
+    if (!myId) return;
+    if (sharing) {
+      await stopLive();
+      // Keep viewing fixes after stopping our own broadcast.
+      void startLiveView(session);
+      return;
+    }
+    const handle = await startLocationSharing(session.session_id, myId, (reason) =>
+      setError(reason)
+    );
+    if (handle) {
+      sharingHandleRef.current = handle;
+      setSharing(true);
+      void setMyParticipantStatus(session.session_id, myId, 'riding').catch(
+        () => undefined
+      );
+    }
+  };
+
   const toggleExpand = async (session: RideSessionRow) => {
     if (expandedId === session.session_id) {
+      await stopLive();
       setExpandedId(null);
       return;
     }
+    await stopLive();
     setExpandedId(session.session_id);
     setParticipants([]);
     try {
@@ -158,6 +248,7 @@ export default function PackDeck() {
         }
       }
       setNames(map);
+      void startLiveView(session);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load riders.');
     }
@@ -331,6 +422,45 @@ export default function PackDeck() {
                       {p.status}
                     </Text>
                   ))}
+                  {session.status === 'active' ? (
+                    <View style={styles.inviteBlock}>
+                      <Pressable
+                        style={styles.smallBtn}
+                        onPress={() => void toggleSharing(session)}
+                      >
+                        <Text style={styles.smallBtnText}>
+                          {sharing
+                            ? 'Stop sharing my location'
+                            : 'Share my location live'}
+                        </Text>
+                      </Pressable>
+                      {participants.map((p) => {
+                        const fix = liveFixes[p.user_id];
+                        return (
+                          <Text key={`fix-${p.user_id}`} style={styles.body}>
+                            @{names[p.user_id] ?? p.user_id.slice(0, 8)}
+                            {fix
+                              ? ` · ${fix.lat.toFixed(5)}, ${fix.lng.toFixed(5)}${
+                                  fix.speedMps != null
+                                    ? ` · ${fix.speedMps.toFixed(1)} m/s`
+                                    : ''
+                                } · ${Math.max(
+                                  0,
+                                  Math.round(
+                                    (Date.now() - Date.parse(fix.recordedAt)) /
+                                      1000
+                                  )
+                                )}s ago`
+                              : ' · no fix yet'}
+                          </Text>
+                        );
+                      })}
+                    </View>
+                  ) : (
+                    <Text style={styles.subtle}>
+                      Live location starts when the host starts the session.
+                    </Text>
+                  )}
                   {isHost && friends.length > 0 && (
                     <View style={styles.inviteBlock}>
                       <Text style={styles.subtle}>Invite a friend:</Text>
