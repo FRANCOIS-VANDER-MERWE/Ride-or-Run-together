@@ -1,5 +1,13 @@
 // src/components/SpotifySyncDeck.tsx
-// Music tab: link a Spotify or Apple Music account, search, and play.
+// Music tab: link an Apple Music account, search, and play.
+//
+// SPOTIFY REMOVED (Nov 9, 2026, Tillman's call, time constraints):
+// Apple Music is the only provider in the app for now. The Spotify
+// provider (src/music/providers/SpotifyProvider.ts) is still in the
+// repo but nothing imports it; the full Spotify integration,
+// including the App Remote spike, lives on the app-remote-spike
+// branch. To revive Spotify, restore the provider switcher and the
+// PKCE sign-in block from git history (last present in d1c4ee5).
 //
 // This component is intentionally just a player UI. It talks to the two
 // MusicProvider implementations in src/music/providers and renders their
@@ -10,14 +18,11 @@
 // same provider interface, not inside this component.
 //
 // What the labels mean (also shown in the UI):
-// - Spotify full tracks play on the user's own Spotify device (Premium),
-//   remote-controlled through the Web API. With no active device, a 30s
-//   preview plays in-app instead, and the UI says "Preview".
 // - Apple Music search is the live catalog on every platform; on native
 //   the in-app player plays the official 30s preview. Full Apple playback
 //   works on web through MusicKit when a developer token is configured.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -27,7 +32,6 @@ import {
   Platform,
   TextInput,
 } from 'react-native';
-import * as AuthSession from 'expo-auth-session';
 
 import {
   AlertTriangle,
@@ -48,12 +52,6 @@ import {
 } from '../data/sessionData';
 import { audioEngine } from '../music/audioEngine';
 import { appleMusicProvider } from '../music/providers/AppleMusicProvider';
-import {
-  buildSpotifyAuthRequestConfig,
-  getSpotifyRedirectUri,
-  spotifyProvider,
-  SPOTIFY_DISCOVERY,
-} from '../music/providers/SpotifyProvider';
 import {
   AuthState,
   CanonicalTrack,
@@ -108,14 +106,14 @@ const PROVIDER_COLORS: Record<ProviderId, string> = {
 export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
   const { isVoiceDucked, isPlaying: appIsPlaying, onTogglePlay } = props;
 
-  const [providerId, setProviderId] = useState<ProviderId>('spotify');
-  const provider =
-    providerId === 'spotify' ? spotifyProvider : appleMusicProvider;
+  // Apple Music only (Nov 9, 2026). providerId stays as a constant so
+  // the render code below keeps its shape for an easy Spotify revival.
+  const providerId: ProviderId = 'apple';
+  const provider = appleMusicProvider;
   const accent = PROVIDER_COLORS[providerId];
 
-  const [spotifyAuth, setSpotifyAuth] = useState<AuthState | null>(null);
   const [appleAuth, setAppleAuth] = useState<AuthState | null>(null);
-  const activeAuth = providerId === 'spotify' ? spotifyAuth : appleAuth;
+  const activeAuth = appleAuth;
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<CanonicalTrack[]>([]);
@@ -128,70 +126,8 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
   const [error, setError] = useState<string | null>(null);
   const [barWidth, setBarWidth] = useState(260);
 
-  // --- Spotify PKCE sign-in (hook must live in a component) ---
-  const spotifyConfigured = spotifyProvider.isConfigured();
-  const authConfig = useMemo(() => {
-    const cfg = buildSpotifyAuthRequestConfig();
-    return spotifyConfigured ? cfg : { ...cfg, clientId: 'not-configured' };
-  }, [spotifyConfigured]);
-  const [authRequest, authResponse, promptSpotifyAuth] =
-    AuthSession.useAuthRequest(authConfig, SPOTIFY_DISCOVERY);
-
-  useEffect(() => {
-    if (!authResponse) return;
-    if (authResponse.type === 'error') {
-      setError(
-        `Spotify sign-in failed: ${
-          authResponse.params?.error_description ??
-          authResponse.error?.message ??
-          'unknown error'
-        }`
-      );
-      return;
-    }
-    if (authResponse.type === 'dismiss' || authResponse.type === 'cancel') {
-      setError(
-        'Spotify sign-in did not complete (the popup closed or was dismissed before Spotify answered).'
-      );
-      return;
-    }
-    if (authResponse.type !== 'success' || !authResponse.params.code) {
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const state = await spotifyProvider.connectWithCode(
-          authResponse.params.code,
-          authRequest?.codeVerifier,
-          getSpotifyRedirectUri()
-        );
-        if (!cancelled) {
-          setSpotifyAuth(state);
-          // A resolved exchange that still is not connected must not be
-          // silent; name it so the failure is reportable.
-          setError(
-            state.isConnected
-              ? null
-              : 'Spotify sign-in returned, but the app does not show a connected state. Try again from http://localhost:8081 (not 127.0.0.1).'
-          );
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : 'Spotify sign-in failed.'
-          );
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [authResponse]);
-
   // --- initial auth state ---
   useEffect(() => {
-    spotifyProvider.getAuthState().then(setSpotifyAuth).catch(() => {});
     appleMusicProvider.getAuthState().then(setAppleAuth).catch(() => {});
   }, []);
 
@@ -247,10 +183,6 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
   const handleSearch = async () => {
     const q = query.trim();
     if (!q) return;
-    if (providerId === 'spotify' && !spotifyAuth?.isConnected) {
-      setError('Connect Spotify first, then search your catalog.');
-      return;
-    }
     setSearching(true);
     setError(null);
     try {
@@ -275,10 +207,6 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
     setBusy(true);
     setError(null);
     try {
-      // Stop the other provider first so two sources never overlap.
-      const other =
-        providerId === 'spotify' ? appleMusicProvider : spotifyProvider;
-      await other.pause().catch(() => {});
       await provider.playTrack(track, 0);
       setCurrent(track);
       setCurrentResultIndex(index);
@@ -317,16 +245,6 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
 
   const handleConnect = async () => {
     setError(null);
-    if (providerId === 'spotify') {
-      if (!spotifyConfigured) {
-        setError(
-          'Spotify is not configured: set EXPO_PUBLIC_SPOTIFY_CLIENT_ID in .env, register the redirect URI in the Spotify dashboard, and restart.'
-        );
-        return;
-      }
-      await promptSpotifyAuth();
-      return;
-    }
     try {
       const state = await appleMusicProvider.connect();
       setAppleAuth(state);
@@ -339,8 +257,7 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
     try {
       await provider.disconnect();
       const state = await provider.getAuthState();
-      if (providerId === 'spotify') setSpotifyAuth(state);
-      else setAppleAuth(state);
+      setAppleAuth(state);
       if (current && snapshot?.trackKey) {
         setCurrent(null);
         setSnapshot(null);
@@ -362,41 +279,9 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
       <View style={styles.headerRow}>
         <Music2 size={16} color={accent} />
         <Text style={[styles.headerLabel, { color: accent }]}>
-          MUSIC · {providerId === 'spotify' ? 'SPOTIFY' : 'APPLE MUSIC'}
+          MUSIC · APPLE MUSIC
         </Text>
       </View>
-      <View style={styles.pillsRow}>
-        {(['spotify', 'apple'] as ProviderId[]).map((pid) => {
-          const active = pid === providerId;
-          return (
-            <Pressable
-              key={pid}
-              onPress={() => {
-                setProviderId(pid);
-                setError(null);
-              }}
-              style={[
-                styles.pill,
-                active && {
-                  borderColor: PROVIDER_COLORS[pid],
-                  backgroundColor: 'rgba(255,255,255,0.06)',
-                },
-              ]}
-            >
-              <View
-                style={[
-                  styles.pillDot,
-                  { backgroundColor: PROVIDER_COLORS[pid] },
-                ]}
-              />
-              <Text style={styles.pillText}>
-                {pid === 'spotify' ? 'Spotify' : 'Apple Music'}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
       {/* connection card */}
       <View style={styles.card}>
         {activeAuth?.isConnected ? (
@@ -406,14 +291,6 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
               <Text style={styles.connectTitle}>
                 {activeAuth.userDisplayName ?? 'Connected'}
               </Text>
-              {providerId === 'spotify' &&
-                (activeAuth.isPremiumOrSubscribed ? (
-                  <Text style={styles.badge}>PREMIUM</Text>
-                ) : (
-                  <Text style={[styles.badge, styles.badgeWarn]}>
-                    FREE · PREVIEWS + REMOTE LIMITS
-                  </Text>
-                ))}
             </View>
             <Pressable onPress={handleDisconnect} style={styles.linkBtn}>
               <Text style={styles.linkBtnText}>Disconnect</Text>
@@ -425,20 +302,13 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
             style={[styles.connectBtn, { backgroundColor: accent }]}
           >
             <Text style={styles.connectBtnText}>
-              {providerId === 'spotify'
-                ? 'Connect Spotify account'
-                : appleMusicProvider.canUseMusicKit()
-                  ? 'Connect Apple Music account'
-                  : 'Use Apple Music catalog'}
+              {appleMusicProvider.canUseMusicKit()
+                ? 'Connect Apple Music account'
+                : 'Use Apple Music catalog'}
             </Text>
           </Pressable>
         )}
         <Text style={styles.noteText}>{provider.capabilities.playbackNote}</Text>
-        {providerId === 'spotify' && !spotifyConfigured && (
-          <Text style={[styles.noteText, styles.warnText]}>
-            Not configured: EXPO_PUBLIC_SPOTIFY_CLIENT_ID is empty.
-          </Text>
-        )}
       </View>
 
       {/* search */}
@@ -449,9 +319,7 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
             onChangeText={setQuery}
             onSubmitEditing={handleSearch}
             placeholder={
-              providerId === 'spotify'
-                ? 'Search Spotify (song or artist)...'
-                : 'Search Apple Music (song or artist)...'
+              'Search Apple Music (song or artist)...'
             }
             placeholderTextColor='#6B7280'
             style={styles.searchInput}
