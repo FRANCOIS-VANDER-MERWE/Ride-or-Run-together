@@ -270,6 +270,9 @@ create policy tracks_select on public.tracks
 drop policy if exists tracks_insert on public.tracks;
 create policy tracks_insert on public.tracks
   for insert to authenticated with check (true);
+drop policy if exists tracks_update on public.tracks;
+create policy tracks_update on public.tracks
+  for update to authenticated using (true) with check (true);
 
 -- ---------- playlists and playlist_tracks (owner only in v1) ----------
 drop policy if exists playlists_all on public.playlists;

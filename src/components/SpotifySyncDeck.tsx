@@ -135,6 +135,9 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
   const [lastPublishedTitle, setLastPublishedTitle] = useState<string | null>(
     null
   );
+  const [packLinkStatus, setPackLinkStatus] = useState('not connected');
+  const [lastPackEventAt, setLastPackEventAt] = useState<string | null>(null);
+  const [followNotice, setFollowNotice] = useState<string | null>(null);
   const publishToPack = (track: CanonicalTrack) => {
     const sessionId = activeSession?.session_id;
     const userId = auth.user?.id;
@@ -294,7 +297,7 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
   const myUserId = auth.user?.id ?? null;
   const appleConnected = !!activeAuth?.isConnected;
   useEffect(() => {
-    if (!activeSessionId || !myUserId || !appleConnected) return;
+    if (!activeSessionId || !myUserId) return;
     let live = true;
     const handleState = async (
       row: SessionPlaybackStateRow | null,
@@ -311,6 +314,13 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
         return; // stale state from an earlier ride; do not autoplay it
       }
       if (row.current_item_id !== followedItemRef.current) {
+        if (!appleConnected) {
+          followedItemRef.current = row.current_item_id;
+          setFollowNotice(
+            'The pack started a new track. Connect Apple Music above to hear it here.'
+          );
+          return;
+        }
         if (followBusyRef.current) return;
         followBusyRef.current = true;
         try {
@@ -372,7 +382,15 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
       .catch(() => {});
     const channel = subscribeToTableChanges('session_playback_state', {
       sessionId: activeSessionId,
+      onStatus: (status) => {
+        setPackLinkStatus(
+          status === 'SUBSCRIBED'
+            ? 'live'
+            : status.toLowerCase().replace(/_/g, ' ')
+        );
+      },
       onChange: (payload) => {
+        setLastPackEventAt(new Date().toLocaleTimeString());
         void handleState(
           payload.new as unknown as SessionPlaybackStateRow,
           false
@@ -469,6 +487,15 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
       ) : lastPublishedTitle && activeSession ? (
         <Text style={styles.packLineMuted}>
           Queued for the pack: {lastPublishedTitle}
+        </Text>
+      ) : null}
+      {followNotice && !packSyncError ? (
+        <Text style={styles.packLineMuted}>{followNotice}</Text>
+      ) : null}
+      {activeSession ? (
+        <Text style={styles.packLineMuted}>
+          Pack link: {packLinkStatus} · last update{' '}
+          {lastPackEventAt ?? 'none yet'}
         </Text>
       ) : null}
       {/* connection card */}

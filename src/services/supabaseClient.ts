@@ -83,6 +83,7 @@ export function subscribeToTableChanges(
   options: {
     sessionId?: string;
     event?: TableChangeEvent;
+    onStatus?: (status: string) => void;
     onChange: (payload: {
       eventType: string;
       new: Record<string, unknown>;
@@ -115,7 +116,9 @@ export function subscribeToTableChanges(
         options.onChange(p);
       }
     )
-    .subscribe();
+    .subscribe((status) => {
+      options.onStatus?.(String(status));
+    });
   return channel;
 }
 

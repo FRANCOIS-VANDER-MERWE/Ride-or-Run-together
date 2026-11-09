@@ -28,29 +28,54 @@ export interface ProviderTrackInput {
   artworkUrl?: string;
 }
 
-/** Finds or creates the catalog row for a provider track. */
+/**
+ * Finds or creates the catalog row for a provider track.
+ *
+ * Deliberately NOT a database upsert: rls_policies.sql grants tracks
+ * SELECT and INSERT to authenticated users but no UPDATE, and an
+ * INSERT ... ON CONFLICT DO UPDATE needs the UPDATE policy, so a
+ * plain upsert fails with an RLS error for any track already in the
+ * catalog (that is, any song anyone has queued before). Select
+ * first, insert when missing, and re-select if a concurrent insert
+ * wins the race.
+ */
 export async function upsertTrack(
   input: ProviderTrackInput
 ): Promise<TrackRow> {
   const db = requireSupabase();
+  const existing = await db
+    .from('tracks')
+    .select('*')
+    .eq('provider', input.provider)
+    .eq('provider_track_id', input.providerTrackId)
+    .maybeSingle();
+  if (existing.error) {
+    throw new Error(`[Supabase] upsertTrack lookup: ${existing.error.message}`);
+  }
+  if (existing.data) return existing.data;
   const { data, error } = await db
     .from('tracks')
-    .upsert(
-      {
-        provider: input.provider,
-        provider_track_id: input.providerTrackId,
-        title: input.title,
-        artist: input.artist,
-        album: input.album ?? null,
-        duration_ms: input.durationMs ?? null,
-        artwork_url: input.artworkUrl ?? null,
-      },
-      { onConflict: 'provider,provider_track_id' }
-    )
+    .insert({
+      provider: input.provider,
+      provider_track_id: input.providerTrackId,
+      title: input.title,
+      artist: input.artist,
+      album: input.album ?? null,
+      duration_ms: input.durationMs ?? null,
+      artwork_url: input.artworkUrl ?? null,
+    })
     .select('*')
     .single();
-  if (error) throw new Error(`[Supabase] upsertTrack: ${error.message}`);
-  return data;
+  if (!error && data) return data;
+  // Lost a race with a concurrent insert of the same track: read it back.
+  const retry = await db
+    .from('tracks')
+    .select('*')
+    .eq('provider', input.provider)
+    .eq('provider_track_id', input.providerTrackId)
+    .maybeSingle();
+  if (retry.data) return retry.data;
+  throw new Error(`[Supabase] upsertTrack: ${error?.message ?? 'unknown error'}`);
 }
 
 export async function createPlaylist(

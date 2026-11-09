@@ -22,6 +22,8 @@ import {
   View,
 } from 'react-native';
 import { useAuth } from '../auth/AuthProvider';
+import { searchAppleCatalog } from '../music/appleMusicApi';
+import type { CanonicalTrack } from '../music/types';
 import { useActiveSession } from '../session/ActiveSessionContext';
 import type {
   ProfileRow,
@@ -123,6 +125,11 @@ export default function PackDeck() {
   const [playback, setPlayback] = useState<SessionPlaybackStateRow | null>(null);
   const queueChannelsRef = useRef<RealtimeChannel[]>([]);
   const [trackTitle, setTrackTitle] = useState('');
+  const [songQuery, setSongQuery] = useState('');
+  const [songResults, setSongResults] = useState<CanonicalTrack[]>([]);
+  const [songSearching, setSongSearching] = useState(false);
+  const [songError, setSongError] = useState<string | null>(null);
+  const [queueLive, setQueueLive] = useState('connecting');
   const [trackArtist, setTrackArtist] = useState('');
   const [trackProvider, setTrackProvider] =
     useState<MusicProviderId>('apple_music');
@@ -277,13 +284,22 @@ export default function PackDeck() {
     (session: RideSessionRow) => {
       void loadQueue(session.session_id);
       const onChange = () => void loadQueue(session.session_id);
+      const onStatus = (status: string) => {
+        setQueueLive(
+          status === 'SUBSCRIBED'
+            ? 'live'
+            : status.toLowerCase().replace(/_/g, ' ')
+        );
+      };
       const q = subscribeToTableChanges('session_queue', {
         sessionId: session.session_id,
         onChange,
+        onStatus,
       });
       const p = subscribeToTableChanges('session_playback_state', {
         sessionId: session.session_id,
         onChange,
+        onStatus,
       });
       queueChannelsRef.current = [q, p].filter(
         (c): c is RealtimeChannel => Boolean(c)
@@ -544,7 +560,18 @@ export default function PackDeck() {
                     </Text>
                   )}
                   <View style={styles.inviteBlock}>
-                    <Text style={styles.subtle}>SHARED QUEUE</Text>
+                    <Text style={styles.subtle}>
+                      SHARED QUEUE · {queueLive}
+                    </Text>
+                    <View style={styles.actionRow}>
+                      <Pressable
+                        style={styles.smallBtn}
+                        disabled={busy}
+                        onPress={() => void loadQueue(session.session_id)}
+                      >
+                        <Text style={styles.smallBtnText}>Refresh</Text>
+                      </Pressable>
+                    </View>
                     {(() => {
                       const current = queueEntries.find(
                         (e) => e.item.queue_item_id === playback?.current_item_id
@@ -559,6 +586,95 @@ export default function PackDeck() {
                         </Text>
                       );
                     })()}
+                    <TextInput
+                      style={styles.input}
+                      value={songQuery}
+                      onChangeText={setSongQuery}
+                      placeholder="Search Apple Music"
+                      placeholderTextColor={MUTED}
+                      autoCorrect={false}
+                      returnKeyType="search"
+                      onSubmitEditing={() => {
+                        if (!songQuery.trim() || songSearching) return;
+                        setSongSearching(true);
+                        setSongError(null);
+                        searchAppleCatalog(songQuery.trim(), 10)
+                          .then(setSongResults)
+                          .catch((err: unknown) =>
+                            setSongError(
+                              err instanceof Error
+                                ? err.message
+                                : 'Search failed.'
+                            )
+                          )
+                          .finally(() => setSongSearching(false));
+                      }}
+                    />
+                    <View style={styles.actionRow}>
+                      <Pressable
+                        style={styles.smallBtn}
+                        disabled={songSearching || !songQuery.trim()}
+                        onPress={() => {
+                          if (!songQuery.trim()) return;
+                          setSongSearching(true);
+                          setSongError(null);
+                          searchAppleCatalog(songQuery.trim(), 10)
+                            .then(setSongResults)
+                            .catch((err: unknown) =>
+                              setSongError(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Search failed.'
+                              )
+                            )
+                            .finally(() => setSongSearching(false));
+                        }}
+                      >
+                        <Text style={styles.smallBtnText}>
+                          {songSearching ? 'Searching...' : 'Search'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                    {songError ? (
+                      <Text style={styles.body}>Search: {songError}</Text>
+                    ) : null}
+                    {songResults.map((t) => (
+                      <View
+                        key={t.providerIds.apple ?? t.title}
+                        style={styles.actionRow}
+                      >
+                        <Text style={styles.body}>
+                          {t.title} · {t.artist}
+                        </Text>
+                        <Pressable
+                          style={styles.smallBtn}
+                          disabled={busy}
+                          onPress={() =>
+                            void run(async () => {
+                              if (!myId) throw new Error('Not signed in.');
+                              const appleId = t.providerIds.apple;
+                              if (!appleId) {
+                                throw new Error(
+                                  'That result has no Apple Music ID.'
+                                );
+                              }
+                              await enqueueTrack(session.session_id, myId, {
+                                provider: 'apple_music',
+                                providerTrackId: appleId,
+                                title: t.title,
+                                artist: t.artist,
+                                album: t.album,
+                                durationMs: t.durationMs,
+                                artworkUrl: t.artworkUrl,
+                              });
+                              await loadQueue(session.session_id);
+                            }, `Added ${t.title} to the queue.`)
+                          }
+                        >
+                          <Text style={styles.smallBtnText}>Add</Text>
+                        </Pressable>
+                      </View>
+                    ))}
                     {playback?.current_item_id && (
                       <View style={styles.actionRow}>
                         <Pressable
