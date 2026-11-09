@@ -1,26 +1,13 @@
-// src/components/SpotifySyncDeck.tsx
-// Music tab: link an Apple Music account, search, and play.
+// src/components/MusicSyncDeck.tsx
+// Music tab: connect Apple Music, search the catalog, and play. Plays
+// publish into the active pack session's shared queue, and when
+// someone else in the session is DJ this tab follows their playback.
 //
-// SPOTIFY REMOVED (Nov 9, 2026, Tillman's call, time constraints):
-// Apple Music is the only provider in the app for now. The Spotify
-// provider (src/music/providers/SpotifyProvider.ts) is still in the
-// repo but nothing imports it; the full Spotify integration,
-// including the App Remote spike, lives on the app-remote-spike
-// branch. To revive Spotify, restore the provider switcher and the
-// PKCE sign-in block from git history (last present in d1c4ee5).
-//
-// This component is intentionally just a player UI. It talks to the two
-// MusicProvider implementations in src/music/providers and renders their
-// real state. It used to route through a 1,200-line "sync coordinator"
-// with simulated members, fake timestamps, and a Web Audio synthesizer;
-// all of that was removed (Nov 2, 2026) because none of it produced real
-// playback on a phone. Group sync, when it is built, belongs behind the
-// same provider interface, not inside this component.
-//
-// What the labels mean (also shown in the UI):
-// - Apple Music search is the live catalog on every platform; on native
-//   the in-app player plays the official 30s preview. Full Apple playback
-//   works on web through MusicKit when a developer token is configured.
+// Apple Music is the only provider. Search is the live catalog on
+// every platform; on native the in-app player plays the official 30s
+// preview, and full playback works on web through MusicKit when a
+// developer token is configured. The Spotify integration lives on the
+// app-remote-spike branch if it is ever revived.
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -28,8 +15,7 @@ import {
   Text,
   Pressable,
   Image,
-  StyleSheet,
-  Platform,
+  ScrollView,
   TextInput,
 } from 'react-native';
 
@@ -42,9 +28,7 @@ import {
   RefreshCw,
   SkipBack,
   SkipForward,
-  Volume2,
-} from './Icons';
-import { audioEngine } from '../music/audioEngine';
+} from 'lucide-react-native';
 import { useAuth } from '../auth/AuthProvider';
 import { useActiveSession } from '../session/ActiveSessionContext';
 import {
@@ -69,12 +53,6 @@ import {
 } from '../music/types';
 
 
-const MONO_FONT = Platform.select({
-  ios: 'Menlo',
-  android: 'monospace',
-  default: 'monospace',
-});
-
 function formatTime(ms: number | null | undefined): string {
   if (!ms || ms < 0) return '0:00';
   const s = Math.floor(ms / 1000);
@@ -84,17 +62,14 @@ function formatTime(ms: number | null | undefined): string {
 }
 
 const KIND_LABELS: Record<PlaybackKind, string> = {
-  remote: 'Full track · playing on your Spotify device',
+  remote: 'Full track · Apple Music',
   preview: 'Preview · 30s, playing in this app',
   musickit: 'Full track · Apple Music (web)',
 };
 
-const PROVIDER_COLORS: Record<ProviderId, string> = {
-  spotify: '#1DB954',
-  apple: '#FA243C',
-};
+const ACCENT = '#FA243C';
 
-export default function SpotifySyncDeck() {
+export default function MusicSyncDeck() {
 
   // Apple Music only (Nov 9, 2026). providerId stays as a constant so
   // the render code below keeps its shape for an easy Spotify revival.
@@ -147,7 +122,7 @@ export default function SpotifySyncDeck() {
       });
   };
   const provider = appleMusicProvider;
-  const accent = PROVIDER_COLORS[providerId];
+  const accent = ACCENT;
 
   const [appleAuth, setAppleAuth] = useState<AuthState | null>(null);
   const activeAuth = appleAuth;
@@ -422,97 +397,102 @@ export default function SpotifySyncDeck() {
     durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
 
   return (
-    <View style={styles.root}>
-      {/* header + provider switch */}
-      <View style={styles.headerRow}>
+    <ScrollView
+      className="flex-1 bg-ink"
+      contentContainerClassName="gap-3 px-5 py-5"
+    >
+      <View className="flex-row items-center gap-2">
         <Music2 size={16} color={accent} />
-        <Text style={[styles.headerLabel, { color: accent }]}>
+        <Text className="font-mono text-[12px] tracking-[1.5px] text-[#FA243C]">
           MUSIC · APPLE MUSIC
         </Text>
       </View>
       {activeSession ? (
-        <Text style={styles.packLine}>
+        <Text className="mt-1.5 font-mono text-[11px] leading-[15px] text-accent">
           Pack session: {activeSession.title}. Songs you play here queue
           for the whole pack.
         </Text>
       ) : (
-        <Text style={styles.packLineMuted}>
+        <Text className="mt-1.5 font-mono text-[11px] leading-[15px] text-muted">
           No active pack session. Set one in the Pack tab and songs you
           play here will queue for the group.
         </Text>
       )}
       {packSyncError ? (
-        <Text style={styles.packError}>Pack sync: {packSyncError}</Text>
+        <Text className="mt-1 font-mono text-[11px] leading-[15px] text-danger">
+          Pack sync: {packSyncError}
+        </Text>
       ) : lastPublishedTitle && activeSession ? (
-        <Text style={styles.packLineMuted}>
+        <Text className="mt-1.5 font-mono text-[11px] leading-[15px] text-muted">
           Queued for the pack: {lastPublishedTitle}
         </Text>
       ) : null}
       {followNotice && !packSyncError ? (
-        <Text style={styles.packLineMuted}>{followNotice}</Text>
+        <Text className="mt-1.5 font-mono text-[11px] leading-[15px] text-muted">
+          {followNotice}
+        </Text>
       ) : null}
       {activeSession ? (
-        <Text style={styles.packLineMuted}>
+        <Text className="mt-1.5 font-mono text-[11px] leading-[15px] text-muted">
           Pack link: {packLinkStatus} · last update{' '}
           {lastPackEventAt ?? 'none yet'}
         </Text>
       ) : null}
-      {/* connection card */}
-      <View style={styles.card}>
+      <View className="gap-2.5 rounded-[14px] border border-line bg-panel p-3.5">
         {activeAuth?.isConnected ? (
           <>
-            <View style={styles.connectRow}>
-              <CheckCircle2 size={16} color='#34D399' />
-              <Text style={styles.connectTitle}>
+            <View className="flex-row items-center gap-2">
+              <CheckCircle2 size={16} color="#34D399" />
+              <Text className="flex-1 text-[14px] font-semibold text-fog">
                 {activeAuth.userDisplayName ?? 'Connected'}
               </Text>
             </View>
-            <Pressable onPress={handleDisconnect} style={styles.linkBtn}>
-              <Text style={styles.linkBtnText}>Disconnect</Text>
+            <Pressable onPress={handleDisconnect} className="self-start">
+              <Text className="text-[12px] text-muted underline">Disconnect</Text>
             </Pressable>
           </>
         ) : (
           <Pressable
             onPress={handleConnect}
-            style={[styles.connectBtn, { backgroundColor: accent }]}
+            className="items-center rounded-[10px] bg-[#FA243C] py-3"
           >
-            <Text style={styles.connectBtnText}>
+            <Text className="text-[14px] font-bold text-ink">
               {appleMusicProvider.canUseMusicKit()
                 ? 'Connect Apple Music account'
                 : 'Use Apple Music catalog'}
             </Text>
           </Pressable>
         )}
-        <Text style={styles.noteText}>{provider.capabilities.playbackNote}</Text>
+        <Text className="text-[12px] leading-[17px] text-muted">
+          {provider.capabilities.playbackNote}
+        </Text>
       </View>
-
-      {/* search */}
-      <View style={styles.card}>
-        <View style={styles.searchRow}>
+      <View className="gap-2.5 rounded-[14px] border border-line bg-panel p-3.5">
+        <View className="flex-row gap-2">
           <TextInput
             value={query}
             onChangeText={setQuery}
             onSubmitEditing={handleSearch}
-            placeholder={
-              'Search Apple Music (song or artist)...'
-            }
-            placeholderTextColor='#6B7280'
-            style={styles.searchInput}
-            returnKeyType='search'
+            placeholder="Search Apple Music (song or artist)..."
+            placeholderTextColor="#6B7280"
+            className="flex-1 rounded-[10px] border border-line bg-panel2 px-3 py-2.5 text-[14px] text-fog"
+            returnKeyType="search"
           />
           <Pressable
             onPress={handleSearch}
-            style={[styles.searchBtn, { backgroundColor: accent }]}
+            className="items-center justify-center rounded-[10px] bg-[#FA243C] px-4"
           >
-            <Text style={styles.searchBtnText}>
+            <Text className="text-[13px] font-bold text-ink">
               {searching ? '...' : 'Search'}
             </Text>
           </Pressable>
         </View>
         {error && (
-          <View style={styles.errorRow}>
-            <AlertTriangle size={14} color='#FBBF24' />
-            <Text style={styles.errorText}>{error}</Text>
+          <View className="flex-row items-start gap-2">
+            <AlertTriangle size={14} color="#FBBF24" />
+            <Text className="flex-1 text-[12px] leading-[17px] text-warn">
+              {error}
+            </Text>
           </View>
         )}
         {results.map((item, index) => {
@@ -525,21 +505,24 @@ export default function SpotifySyncDeck() {
             <Pressable
               key={key}
               onPress={() => playTrack(item, index)}
-              style={[styles.resultRow, isCurrent && styles.resultRowActive]}
+              className={`flex-row items-center gap-2.5 border-t border-line py-2 ${isCurrent ? 'bg-panel2' : ''}`}
             >
               {item.artworkUrl ? (
-                <Image source={{ uri: item.artworkUrl }} style={styles.artwork} />
+                <Image
+                  source={{ uri: item.artworkUrl }}
+                  className="h-11 w-11 rounded-lg"
+                />
               ) : (
-                <View style={[styles.artwork, styles.artworkPlaceholder]}>
-                  <Music2 size={16} color='#9CA3AF' />
+                <View className="h-11 w-11 items-center justify-center rounded-lg bg-panel2">
+                  <Music2 size={16} color="#9CA3AF" />
                 </View>
               )}
-              <View style={styles.resultMeta}>
-                <Text style={styles.resultTitle} numberOfLines={1}>
+              <View className="flex-1 gap-0.5">
+                <Text className="text-[14px] font-semibold text-fog" numberOfLines={1}>
                   {item.title}
                   {item.explicit ? '  (E)' : ''}
                 </Text>
-                <Text style={styles.resultArtist} numberOfLines={1}>
+                <Text className="text-[12px] text-muted" numberOfLines={1}>
                   {item.artist} · {formatTime(item.durationMs)}
                 </Text>
               </View>
@@ -552,29 +535,27 @@ export default function SpotifySyncDeck() {
           );
         })}
       </View>
-
-      {/* now playing */}
       {current && (
-        <View style={styles.card}>
-          <View style={styles.nowRow}>
+        <View className="gap-2.5 rounded-[14px] border border-line bg-panel p-3.5">
+          <View className="flex-row items-center gap-3">
             {current.artworkUrl ? (
               <Image
                 source={{ uri: current.artworkUrl }}
-                style={styles.nowArtwork}
+                className="h-14 w-14 rounded-[10px]"
               />
             ) : (
-              <View style={[styles.nowArtwork, styles.artworkPlaceholder]}>
-                <Music2 size={20} color='#9CA3AF' />
+              <View className="h-14 w-14 items-center justify-center rounded-[10px] bg-panel2">
+                <Music2 size={20} color="#9CA3AF" />
               </View>
             )}
-            <View style={styles.resultMeta}>
-              <Text style={styles.nowTitle} numberOfLines={1}>
+            <View className="flex-1 gap-0.5">
+              <Text className="text-[15px] font-bold text-fog" numberOfLines={1}>
                 {current.title}
               </Text>
-              <Text style={styles.resultArtist} numberOfLines={1}>
+              <Text className="text-[12px] text-muted" numberOfLines={1}>
                 {current.artist}
               </Text>
-              <Text style={styles.kindLabel}>
+              <Text className="font-mono text-[10px] text-muted">
                 {snapshot?.kind
                   ? KIND_LABELS[snapshot.kind]
                   : busy
@@ -593,41 +574,46 @@ export default function SpotifySyncDeck() {
               );
               void provider.seek(ratio * durationMs);
             }}
-            style={styles.progressTrack}
+            className="h-[10px] justify-center overflow-hidden rounded-[5px] bg-panel2"
           >
             <View
-              style={[
-                styles.progressFill,
-                { width: `${progressRatio * 100}%`, backgroundColor: accent },
-              ]}
+              className="h-1 rounded-full bg-[#FA243C]"
+              style={{ width: `${progressRatio * 100}%` }}
             />
           </Pressable>
-          <View style={styles.timeRow}>
-            <Text style={styles.timeText}>{formatTime(positionMs)}</Text>
-            <Text style={styles.timeText}>{formatTime(durationMs)}</Text>
+          <View className="flex-row justify-between">
+            <Text className="font-mono text-[11px] text-muted">
+              {formatTime(positionMs)}
+            </Text>
+            <Text className="font-mono text-[11px] text-muted">
+              {formatTime(durationMs)}
+            </Text>
           </View>
-          <View style={styles.controlsRow}>
+          <View className="flex-row items-center justify-center gap-[22px]">
             <Pressable
               onPress={() => handleSkip(-1)}
               disabled={currentResultIndex <= 0}
-              style={styles.controlBtn}
+              className="p-1.5"
             >
               <SkipBack
                 size={22}
                 color={currentResultIndex <= 0 ? '#4B5563' : '#E5E7EB'}
               />
             </Pressable>
-            <Pressable onPress={handleToggle} style={styles.playBtn}>
+            <Pressable
+              onPress={handleToggle}
+              className="h-14 w-14 items-center justify-center rounded-full bg-[#D4FF00]"
+            >
               {snapshot?.isPlaying ? (
-                <Pause size={26} color='#080B10' />
+                <Pause size={26} color="#080B10" />
               ) : (
-                <Play size={26} color='#080B10' />
+                <Play size={26} color="#080B10" />
               )}
             </Pressable>
             <Pressable
               onPress={() => handleSkip(1)}
               disabled={currentResultIndex >= results.length - 1}
-              style={styles.controlBtn}
+              className="p-1.5"
             >
               <SkipForward
                 size={22}
@@ -642,144 +628,13 @@ export default function SpotifySyncDeck() {
               onPress={() => {
                 if (current) void playTrack(current, currentResultIndex);
               }}
-              style={styles.controlBtn}
+              className="p-1.5"
             >
-              <RefreshCw size={18} color='#9CA3AF' />
+              <RefreshCw size={18} color="#9CA3AF" />
             </Pressable>
           </View>
         </View>
       )}
-    </View>
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { gap: 12 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  headerLabel: { fontFamily: MONO_FONT, fontSize: 12, letterSpacing: 1.5 },
-  packLine: {
-    fontFamily: MONO_FONT,
-    fontSize: 11,
-    color: '#34D399',
-    marginTop: 6,
-    lineHeight: 15,
-  },
-  packError: {
-    fontFamily: MONO_FONT,
-    fontSize: 11,
-    color: '#F87171',
-    marginTop: 4,
-    lineHeight: 15,
-  },
-  packLineMuted: {
-    fontFamily: MONO_FONT,
-    fontSize: 11,
-    color: '#8A93A6',
-    marginTop: 6,
-    lineHeight: 15,
-  },
-  pillsRow: { flexDirection: 'row', gap: 8 },
-  pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  pillDot: { width: 8, height: 8, borderRadius: 4 },
-  pillText: { color: '#E5E7EB', fontSize: 13, fontWeight: '600' },
-  card: {
-    backgroundColor: '#0D1117',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 14,
-    padding: 14,
-    gap: 10,
-  },
-  connectRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  connectTitle: { color: '#E5E7EB', fontSize: 14, fontWeight: '600', flex: 1 },
-  badge: {
-    color: '#34D399',
-    fontFamily: MONO_FONT,
-    fontSize: 10,
-    letterSpacing: 1,
-  },
-  badgeWarn: { color: '#FBBF24' },
-  linkBtn: { alignSelf: 'flex-start' },
-  linkBtnText: { color: '#9CA3AF', fontSize: 12, textDecorationLine: 'underline' },
-  connectBtn: { borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
-  connectBtnText: { color: '#080B10', fontSize: 14, fontWeight: '700' },
-  noteText: { color: '#9CA3AF', fontSize: 12, lineHeight: 17 },
-  warnText: { color: '#FBBF24' },
-  searchRow: { flexDirection: 'row', gap: 8 },
-  searchInput: {
-    flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 10,
-    color: '#F3F4F6',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-  },
-  searchBtn: {
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  searchBtnText: { color: '#080B10', fontSize: 13, fontWeight: '700' },
-  errorRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
-  errorText: { color: '#FCD34D', fontSize: 12, lineHeight: 17, flex: 1 },
-  resultRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.05)',
-  },
-  resultRowActive: { backgroundColor: 'rgba(255,255,255,0.04)' },
-  artwork: { width: 44, height: 44, borderRadius: 8 },
-  artworkPlaceholder: {
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  resultMeta: { flex: 1, gap: 2 },
-  resultTitle: { color: '#F3F4F6', fontSize: 14, fontWeight: '600' },
-  resultArtist: { color: '#9CA3AF', fontSize: 12 },
-  nowRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  nowArtwork: { width: 56, height: 56, borderRadius: 10 },
-  nowTitle: { color: '#F3F4F6', fontSize: 15, fontWeight: '700' },
-  kindLabel: { color: '#9CA3AF', fontFamily: MONO_FONT, fontSize: 10 },
-  progressTrack: {
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    overflow: 'hidden',
-    justifyContent: 'center',
-  },
-  progressFill: { height: 4, borderRadius: 2 },
-  timeRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  timeText: { color: '#6B7280', fontFamily: MONO_FONT, fontSize: 11 },
-  controlsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 22,
-  },
-  controlBtn: { padding: 6 },
-  playBtn: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#D4FF00',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});

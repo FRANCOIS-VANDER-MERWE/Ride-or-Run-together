@@ -16,7 +16,7 @@ import AccountButton from './auth/AccountButton';
 import { ActiveSessionProvider } from './session/ActiveSessionContext';
 import PackDeck from './components/PackDeck';
 import RideDeck, { type ShellTab } from './components/RideDeck';
-import SpotifySyncDeck from './components/SpotifySyncDeck';
+import MusicSyncDeck from './components/MusicSyncDeck';
 
 const TABS: { id: ShellTab; label: string; Icon: typeof Flag }[] = [
   { id: 'ride', label: 'Ride', Icon: Flag },
@@ -38,7 +38,7 @@ function Shell() {
       <View className="flex-1">
         {activeTab === 'ride' && <RideDeck onNavigate={setActiveTab} />}
         {activeTab === 'pack' && <PackDeck />}
-        {activeTab === 'music' && <SpotifySyncDeck />}
+        {activeTab === 'music' && <MusicSyncDeck />}
       </View>
       <View className="flex-row border-t border-line bg-panel">
         {TABS.map(({ id, label, Icon }) => {
