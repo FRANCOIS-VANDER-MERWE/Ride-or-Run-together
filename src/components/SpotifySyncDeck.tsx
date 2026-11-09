@@ -44,12 +44,6 @@ import {
   SkipForward,
   Volume2,
 } from './Icons';
-import {
-  ActivityMode,
-  Athlete,
-  BroadcastSignalEvent,
-  SpotifyTrack,
-} from '../data/sessionData';
 import { audioEngine } from '../music/audioEngine';
 import { useAuth } from '../auth/AuthProvider';
 import { useActiveSession } from '../session/ActiveSessionContext';
@@ -74,22 +68,6 @@ import {
   ProviderId,
 } from '../music/types';
 
-interface SpotifySyncDeckProps {
-  mode?: ActivityMode;
-  tracks: SpotifyTrack[];
-  currentTrackIndex: number;
-  isPlaying: boolean;
-  progressSec: number;
-  isVoiceDucked: boolean;
-  athletes: Athlete[];
-  broadcastLogs: BroadcastSignalEvent[];
-  onTogglePlay: () => void;
-  onNextTrack: () => void;
-  onPrevTrack: () => void;
-  onSeekTrack: (newSec: number) => void;
-  onForceResyncBroadcast: () => void;
-  onSelectTrackIndex: (index: number) => void;
-}
 
 const MONO_FONT = Platform.select({
   ios: 'Menlo',
@@ -116,8 +94,7 @@ const PROVIDER_COLORS: Record<ProviderId, string> = {
   apple: '#FA243C',
 };
 
-export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
-  const { isVoiceDucked, isPlaying: appIsPlaying, onTogglePlay } = props;
+export default function SpotifySyncDeck() {
 
   // Apple Music only (Nov 9, 2026). providerId stays as a constant so
   // the render code below keeps its shape for an easy Spotify revival.
@@ -191,22 +168,6 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
     appleMusicProvider.getAuthState().then(setAppleAuth).catch(() => {});
   }, []);
 
-  // --- keep the rest of the app informed of real play state ---
-  const lastReportedPlaying = useRef<boolean | null>(null);
-  useEffect(() => {
-    const playing = snapshot?.isPlaying ?? null;
-    if (playing === null || !current) return;
-    if (lastReportedPlaying.current === playing) return;
-    lastReportedPlaying.current = playing;
-    if (playing !== appIsPlaying) {
-      onTogglePlay();
-    }
-  }, [snapshot?.isPlaying, current, appIsPlaying, onTogglePlay]);
-
-  // --- voice ducking affects the in-app preview player ---
-  useEffect(() => {
-    audioEngine.setVolume(isVoiceDucked ? 0.25 : 1);
-  }, [isVoiceDucked]);
 
   // --- snapshot polling for the active provider while something is loaded ---
   useEffect(() => {
@@ -428,8 +389,6 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
     const next = currentResultIndex + delta;
     if (next < 0 || next >= results.length) return;
     await playTrack(results[next], next);
-    if (delta > 0) props.onNextTrack();
-    else props.onPrevTrack();
   };
 
   const handleConnect = async () => {
@@ -623,9 +582,6 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
                     : 'Ready'}
               </Text>
             </View>
-            {isVoiceDucked && snapshot?.kind === 'preview' && (
-              <Volume2 size={16} color='#FBBF24' />
-            )}
           </View>
           <Pressable
             onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
@@ -636,7 +592,6 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
                 Math.min(1, e.nativeEvent.locationX / barWidth)
               );
               void provider.seek(ratio * durationMs);
-              props.onSeekTrack((ratio * durationMs) / 1000);
             }}
             style={styles.progressTrack}
           >
