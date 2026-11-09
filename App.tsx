@@ -1,5 +1,7 @@
 import * as WebBrowser from 'expo-web-browser';
 
+import './global.css';
+
 import App from './src/App';
 
 // Required for OAuth on web: when Spotify redirects back into the auth
