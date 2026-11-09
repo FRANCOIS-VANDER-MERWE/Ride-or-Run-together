@@ -1085,11 +1085,13 @@ function PacelockApp() {
  */
 export default function App() {
   return (
-    <AuthProvider>
-      <AuthGate>
-        <PacelockApp />
-      </AuthGate>
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <AuthGate>
+          <PacelockApp />
+        </AuthGate>
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 
