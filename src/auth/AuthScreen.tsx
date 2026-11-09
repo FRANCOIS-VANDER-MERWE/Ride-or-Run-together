@@ -10,7 +10,6 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -20,13 +19,7 @@ import { useAuth } from './AuthProvider';
 
 export type AuthScreenMode = 'signin' | 'signup' | 'forgot' | 'newPassword';
 
-const ACCENT = '#D4FF00';
-const BG = '#080B10';
-const CARD = '#0D1420';
-const BORDER = '#1E293B';
-const TEXT = '#E2E8F0';
 const MUTED = '#94A3B8';
-const DANGER = '#F87171';
 
 export default function AuthScreen({
   initialMode = 'signin',
@@ -114,33 +107,33 @@ export default function AuthScreen({
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView className="flex-1 bg-ink" edges={['top', 'bottom']}>
       <KeyboardAvoidingView
-        style={styles.flex}
+        className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerClassName="grow justify-center gap-6 p-6"
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.brandBlock}>
-            <View style={styles.logoBadge}>
-              <Text style={styles.logoGlyph}>P</Text>
+          <View className="items-center gap-1.5">
+            <View className="mb-1.5 h-[52px] w-[52px] items-center justify-center rounded-[14px] bg-[#D4FF00]">
+              <Text className="text-[26px] font-extrabold text-ink">P</Text>
             </View>
-            <Text style={styles.brandTitle}>PACELOCK</Text>
-            <Text style={styles.brandSubtitle}>
+            <Text className="text-[26px] font-extrabold tracking-[2px] text-fog">PACELOCK</Text>
+            <Text className="text-[13px] text-muted">
               Ride or Run Together
             </Text>
           </View>
 
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>{titles[mode]}</Text>
+          <View className="gap-2 rounded-2xl border border-line bg-panel p-5">
+            <Text className="mb-2 text-[13px] font-bold tracking-[1.5px] text-[#D4FF00]">{titles[mode]}</Text>
 
             {mode === 'signup' && (
               <>
-                <Text style={styles.label}>USERNAME</Text>
+                <Text className="mt-2 text-[11px] font-bold tracking-[1px] text-muted">USERNAME</Text>
                 <TextInput
-                  style={styles.input}
+                  className="rounded-[10px] border border-line bg-ink px-3 py-[11px] text-[15px] text-fog"
                   value={username}
                   onChangeText={setUsername}
                   placeholder="e.g. tillman"
@@ -153,9 +146,9 @@ export default function AuthScreen({
 
             {mode !== 'newPassword' && (
               <>
-                <Text style={styles.label}>EMAIL</Text>
+                <Text className="mt-2 text-[11px] font-bold tracking-[1px] text-muted">EMAIL</Text>
                 <TextInput
-                  style={styles.input}
+                  className="rounded-[10px] border border-line bg-ink px-3 py-[11px] text-[15px] text-fog"
                   value={email}
                   onChangeText={setEmail}
                   placeholder="you@example.com"
@@ -169,11 +162,11 @@ export default function AuthScreen({
 
             {mode !== 'forgot' && (
               <>
-                <Text style={styles.label}>
+                <Text className="mt-2 text-[11px] font-bold tracking-[1px] text-muted">
                   {mode === 'newPassword' ? 'NEW PASSWORD' : 'PASSWORD'}
                 </Text>
                 <TextInput
-                  style={styles.input}
+                  className="rounded-[10px] border border-line bg-ink px-3 py-[11px] text-[15px] text-fog"
                   value={password}
                   onChangeText={setPassword}
                   placeholder="Password"
@@ -186,9 +179,9 @@ export default function AuthScreen({
 
             {mode === 'newPassword' && (
               <>
-                <Text style={styles.label}>CONFIRM NEW PASSWORD</Text>
+                <Text className="mt-2 text-[11px] font-bold tracking-[1px] text-muted">CONFIRM NEW PASSWORD</Text>
                 <TextInput
-                  style={styles.input}
+                  className="rounded-[10px] border border-line bg-ink px-3 py-[11px] text-[15px] text-fog"
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
                   placeholder="Repeat new password"
@@ -199,11 +192,11 @@ export default function AuthScreen({
               </>
             )}
 
-            {error && <Text style={styles.errorText}>{error}</Text>}
-            {info && <Text style={styles.infoText}>{info}</Text>}
+            {error && <Text className="mt-2 text-[13px] text-danger">{error}</Text>}
+            {info && <Text className="mt-2 text-[13px] text-[#D4FF00]">{info}</Text>}
 
             <Pressable
-              style={[styles.primaryBtn, busy && styles.btnDisabled]}
+              className={`mt-4 items-center rounded-[10px] bg-[#D4FF00] py-[13px] ${busy ? 'opacity-60' : ''}`}
               disabled={busy}
               onPress={
                 mode === 'signin'
@@ -218,7 +211,7 @@ export default function AuthScreen({
               {busy ? (
                 <ActivityIndicator color="#080B10" />
               ) : (
-                <Text style={styles.primaryBtnText}>
+                <Text className="text-[15px] font-extrabold text-ink">
                   {mode === 'signin'
                     ? 'Sign In'
                     : mode === 'signup'
@@ -233,10 +226,10 @@ export default function AuthScreen({
             {mode === 'signin' && (
               <>
                 <Pressable onPress={() => switchMode('forgot')}>
-                  <Text style={styles.linkText}>Forgot password?</Text>
+                  <Text className="mt-3 text-center text-[13px] text-muted underline">Forgot password?</Text>
                 </Pressable>
                 <Pressable onPress={() => switchMode('signup')}>
-                  <Text style={styles.linkText}>
+                  <Text className="mt-3 text-center text-[13px] text-muted underline">
                     New to PACELOCK? Create an account
                   </Text>
                 </Pressable>
@@ -244,14 +237,14 @@ export default function AuthScreen({
             )}
             {mode === 'signup' && (
               <Pressable onPress={() => switchMode('signin')}>
-                <Text style={styles.linkText}>
+                <Text className="mt-3 text-center text-[13px] text-muted underline">
                   Already have an account? Sign in
                 </Text>
               </Pressable>
             )}
             {mode === 'forgot' && (
               <Pressable onPress={() => switchMode('signin')}>
-                <Text style={styles.linkText}>Back to sign in</Text>
+                <Text className="mt-3 text-center text-[13px] text-muted underline">Back to sign in</Text>
               </Pressable>
             )}
           </View>
@@ -261,81 +254,3 @@ export default function AuthScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: BG },
-  flex: { flex: 1 },
-  scroll: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    padding: 24,
-    gap: 24,
-  },
-  brandBlock: { alignItems: 'center', gap: 6 },
-  logoBadge: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: ACCENT,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 6,
-  },
-  logoGlyph: { fontSize: 26, fontWeight: '800', color: BG },
-  brandTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    letterSpacing: 2,
-    color: TEXT,
-  },
-  brandSubtitle: { fontSize: 13, color: MUTED },
-  card: {
-    backgroundColor: CARD,
-    borderColor: BORDER,
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 20,
-    gap: 8,
-  },
-  cardTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-    color: ACCENT,
-    marginBottom: 8,
-  },
-  label: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1,
-    color: MUTED,
-    marginTop: 8,
-  },
-  input: {
-    backgroundColor: BG,
-    borderColor: BORDER,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    color: TEXT,
-    fontSize: 15,
-  },
-  errorText: { color: DANGER, fontSize: 13, marginTop: 8 },
-  infoText: { color: ACCENT, fontSize: 13, marginTop: 8 },
-  primaryBtn: {
-    backgroundColor: ACCENT,
-    borderRadius: 10,
-    paddingVertical: 13,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  btnDisabled: { opacity: 0.6 },
-  primaryBtnText: { color: BG, fontSize: 15, fontWeight: '800' },
-  linkText: {
-    color: MUTED,
-    fontSize: 13,
-    textAlign: 'center',
-    marginTop: 12,
-    textDecorationLine: 'underline',
-  },
-});

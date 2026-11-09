@@ -4,7 +4,7 @@
  * Supabase is not configured or there is no session.
  */
 import React from 'react';
-import { Alert, Pressable, StyleSheet, Text } from 'react-native';
+import { Alert, Pressable, Text } from 'react-native';
 import { useAuth } from './AuthProvider';
 
 export default function AccountButton() {
@@ -24,22 +24,11 @@ export default function AccountButton() {
   };
 
   return (
-    <Pressable onPress={confirmSignOut} style={styles.btn}>
-      <Text style={styles.btnText} numberOfLines={1}>
+    <Pressable onPress={confirmSignOut} className="max-w-[140px] rounded-full border border-line px-2.5 py-[5px]">
+      <Text className="text-[12px] font-bold text-[#D4FF00]" numberOfLines={1}>
         @{label.replace(/^@/, '')}
       </Text>
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
-  btn: {
-    borderWidth: 1,
-    borderColor: '#1E293B',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    maxWidth: 140,
-  },
-  btnText: { color: '#D4FF00', fontSize: 12, fontWeight: '700' },
-});

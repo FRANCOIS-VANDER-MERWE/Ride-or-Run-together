@@ -9,14 +9,12 @@
  * - Session invites inbox (accept joins the session)
  * - Friends: list, incoming requests, and username search
  *
- * It renders inside the app shell's ScrollView, so it owns no scroll
- * container of its own.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  StyleSheet,
+  ScrollView,
   Text,
   TextInput,
   View,
@@ -83,12 +81,7 @@ import {
 import { releaseLocationChannel } from '../services/liveLocationService';
 
 const ACCENT = '#34D399';
-const BG = '#080B10';
-const CARD = '#0D1420';
-const BORDER = '#1E293B';
-const TEXT = '#E2E8F0';
 const MUTED = '#94A3B8';
-const DANGER = '#F87171';
 
 const VISIBILITIES: SessionVisibility[] = ['private', 'friends', 'public'];
 
@@ -401,12 +394,12 @@ export default function PackDeck() {
 
   if (!auth.configured) {
     return (
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>PACK · BACKEND OFFLINE</Text>
-        <Text style={styles.body}>
-          Supabase env vars are not set, so live sessions and friends are
-          unavailable. Add EXPO_PUBLIC_SUPABASE_URL and
-          EXPO_PUBLIC_SUPABASE_ANON_KEY to .env and restart.
+      <View className="m-5 gap-2 rounded-[14px] border border-line bg-panel p-3.5">
+        <Text className="mb-1 text-[12px] font-bold tracking-[1.5px] text-accent">PACK · BACKEND OFFLINE</Text>
+        <Text className="text-[14px] text-fog">
+          The backend is not configured, so live sessions and friends
+          are unavailable. Set the backend URL and anon key in .env and
+          restart.
         </Text>
       </View>
     );
@@ -414,58 +407,52 @@ export default function PackDeck() {
 
   if (!myId) {
     return (
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>PACK</Text>
-        <Text style={styles.body}>Sign in to see your pack.</Text>
+      <View className="gap-2 rounded-[14px] border border-line bg-panel p-3.5">
+        <Text className="mb-1 text-[12px] font-bold tracking-[1.5px] text-accent">PACK</Text>
+        <Text className="text-[14px] text-fog">Sign in to see your pack.</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.root}>
-      <View style={styles.headerRow}>
-        <Text style={styles.headerTitle}>PACK · LIVE BACKEND</Text>
+    <ScrollView className="flex-1 bg-ink" contentContainerClassName="gap-3.5 px-5 py-5">
+      <View className="flex-row items-center justify-between">
+        <Text className="text-[15px] font-extrabold tracking-[1.5px] text-fog">PACK · LIVE BACKEND</Text>
         <Pressable
           onPress={() => void refresh()}
-          style={styles.smallBtn}
+          className="rounded-full border border-line px-2.5 py-[5px]"
           disabled={busy}
         >
-          <Text style={styles.smallBtnText}>Refresh</Text>
+          <Text className="text-[12px] font-bold text-accent">Refresh</Text>
         </Pressable>
       </View>
-      <Text style={styles.subtle}>
+      <Text className="text-[12px] text-muted">
         Signed in as @{auth.profile?.username ?? '...'}
       </Text>
 
-      {error && <Text style={styles.errorText}>{error}</Text>}
-      {info && <Text style={styles.infoText}>{info}</Text>}
+      {error && <Text className="text-[13px] text-danger">{error}</Text>}
+      {info && <Text className="text-[13px] text-accent">{info}</Text>}
       {loading && <ActivityIndicator color={ACCENT} />}
 
       {/* CREATE SESSION */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>CREATE SESSION</Text>
+      <View className="gap-2 rounded-[14px] border border-line bg-panel p-3.5">
+        <Text className="mb-1 text-[12px] font-bold tracking-[1.5px] text-accent">CREATE SESSION</Text>
         <TextInput
-          style={styles.input}
+          className="rounded-[10px] border border-line bg-ink px-3 py-2.5 text-[14px] text-fog"
           value={newTitle}
           onChangeText={setNewTitle}
           placeholder="Saturday ridge loop"
           placeholderTextColor={MUTED}
         />
-        <View style={styles.segmentRow}>
+        <View className="flex-row gap-2">
           {VISIBILITIES.map((v) => (
             <Pressable
               key={v}
               onPress={() => setNewVisibility(v)}
-              style={[
-                styles.segment,
-                newVisibility === v && styles.segmentActive,
-              ]}
+              className={`rounded-full border border-line px-3 py-1.5 ${newVisibility === v ? 'border-accent bg-accent' : ''}`}
             >
               <Text
-                style={[
-                  styles.segmentText,
-                  newVisibility === v && styles.segmentTextActive,
-                ]}
+                className={`text-[12px] font-bold text-muted ${newVisibility === v ? 'text-ink' : ''}`}
               >
                 {v}
               </Text>
@@ -473,19 +460,19 @@ export default function PackDeck() {
           ))}
         </View>
         <Pressable
-          style={[styles.primaryBtn, busy && styles.disabled]}
+          className={`items-center rounded-[10px] bg-accent py-[11px] ${busy ? 'opacity-60' : ''}`}
           onPress={handleCreate}
           disabled={busy}
         >
-          <Text style={styles.primaryBtnText}>Create Session</Text>
+          <Text className="text-[14px] font-extrabold text-ink">Create Session</Text>
         </Pressable>
       </View>
 
       {/* MY SESSIONS */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>MY SESSIONS</Text>
+      <View className="gap-2 rounded-[14px] border border-line bg-panel p-3.5">
+        <Text className="mb-1 text-[12px] font-bold tracking-[1.5px] text-accent">MY SESSIONS</Text>
         {mySessions.length === 0 && (
-          <Text style={styles.body}>
+          <Text className="text-[14px] text-fog">
             No sessions yet. Create one above or join from Discover.
           </Text>
         )}
@@ -493,13 +480,13 @@ export default function PackDeck() {
           const isHost = session.host_id === myId;
           const expanded = expandedId === session.session_id;
           return (
-            <View key={session.session_id} style={styles.rowCard}>
+            <View key={session.session_id} className="gap-1.5 rounded-[10px] border border-line p-2.5">
               <Pressable onPress={() => void toggleExpand(session)}>
-                <View style={styles.rowTop}>
-                  <Text style={styles.rowTitle}>{session.title}</Text>
-                  <Text style={styles.chip}>{session.status}</Text>
+                <View className="flex-row items-center justify-between gap-2">
+                  <Text className="shrink text-[14px] font-bold text-fog">{session.title}</Text>
+                  <Text className="text-[11px] font-bold uppercase text-accent">{session.status}</Text>
                 </View>
-                <Text style={styles.subtle}>
+                <Text className="text-[12px] text-muted">
                   {session.visibility}
                   {isHost ? ' · you host' : ' · guest'}
                   {activeSession?.session_id === session.session_id
@@ -509,24 +496,24 @@ export default function PackDeck() {
                 </Text>
               </Pressable>
               {expanded && (
-                <View style={styles.detailBlock}>
+                <View className="gap-1 pt-1">
                   {participants.length === 0 && (
-                    <Text style={styles.body}>Loading riders...</Text>
+                    <Text className="text-[14px] text-fog">Loading riders...</Text>
                   )}
                   {participants.map((p) => (
-                    <Text key={p.user_id} style={styles.body}>
+                    <Text key={p.user_id} className="text-[14px] text-fog">
                       @{names[p.user_id] ?? p.user_id.slice(0, 8)} · {p.role}
                       {' · '}
                       {p.status}
                     </Text>
                   ))}
                   {session.status === 'active' ? (
-                    <View style={styles.inviteBlock}>
+                    <View className="gap-1.5 pt-1.5">
                       <Pressable
-                        style={styles.smallBtn}
+                        className="rounded-full border border-line px-2.5 py-[5px]"
                         onPress={() => void toggleSharing(session)}
                       >
-                        <Text style={styles.smallBtnText}>
+                        <Text className="text-[12px] font-bold text-accent">
                           {sharing
                             ? 'Stop sharing my location'
                             : 'Share my location live'}
@@ -535,7 +522,7 @@ export default function PackDeck() {
                       {participants.map((p) => {
                         const fix = liveFixes[p.user_id];
                         return (
-                          <Text key={`fix-${p.user_id}`} style={styles.body}>
+                          <Text key={`fix-${p.user_id}`} className="text-[14px] text-fog">
                             @{names[p.user_id] ?? p.user_id.slice(0, 8)}
                             {fix
                               ? ` · ${fix.lat.toFixed(5)}, ${fix.lng.toFixed(5)}${
@@ -555,21 +542,21 @@ export default function PackDeck() {
                       })}
                     </View>
                   ) : (
-                    <Text style={styles.subtle}>
+                    <Text className="text-[12px] text-muted">
                       Live location starts when the host starts the session.
                     </Text>
                   )}
-                  <View style={styles.inviteBlock}>
-                    <Text style={styles.subtle}>
+                  <View className="gap-1.5 pt-1.5">
+                    <Text className="text-[12px] text-muted">
                       SHARED QUEUE · {queueLive}
                     </Text>
-                    <View style={styles.actionRow}>
+                    <View className="flex-row flex-wrap gap-2">
                       <Pressable
-                        style={styles.smallBtn}
+                        className="rounded-full border border-line px-2.5 py-[5px]"
                         disabled={busy}
                         onPress={() => void loadQueue(session.session_id)}
                       >
-                        <Text style={styles.smallBtnText}>Refresh</Text>
+                        <Text className="text-[12px] font-bold text-accent">Refresh</Text>
                       </Pressable>
                     </View>
                     {(() => {
@@ -577,7 +564,7 @@ export default function PackDeck() {
                         (e) => e.item.queue_item_id === playback?.current_item_id
                       );
                       return (
-                        <Text style={styles.body}>
+                        <Text className="text-[14px] text-fog">
                           {current
                             ? `Now: ${current.track?.title ?? 'Track'} · ${
                                 playback?.is_playing ? 'playing' : 'paused'
@@ -587,7 +574,7 @@ export default function PackDeck() {
                       );
                     })()}
                     <TextInput
-                      style={styles.input}
+                      className="rounded-[10px] border border-line bg-ink px-3 py-2.5 text-[14px] text-fog"
                       value={songQuery}
                       onChangeText={setSongQuery}
                       placeholder="Search Apple Music"
@@ -610,9 +597,9 @@ export default function PackDeck() {
                           .finally(() => setSongSearching(false));
                       }}
                     />
-                    <View style={styles.actionRow}>
+                    <View className="flex-row flex-wrap gap-2">
                       <Pressable
-                        style={styles.smallBtn}
+                        className="rounded-full border border-line px-2.5 py-[5px]"
                         disabled={songSearching || !songQuery.trim()}
                         onPress={() => {
                           if (!songQuery.trim()) return;
@@ -630,24 +617,24 @@ export default function PackDeck() {
                             .finally(() => setSongSearching(false));
                         }}
                       >
-                        <Text style={styles.smallBtnText}>
+                        <Text className="text-[12px] font-bold text-accent">
                           {songSearching ? 'Searching...' : 'Search'}
                         </Text>
                       </Pressable>
                     </View>
                     {songError ? (
-                      <Text style={styles.body}>Search: {songError}</Text>
+                      <Text className="text-[14px] text-fog">Search: {songError}</Text>
                     ) : null}
                     {songResults.map((t) => (
                       <View
                         key={t.providerIds.apple ?? t.title}
-                        style={styles.actionRow}
+                        className="flex-row flex-wrap gap-2"
                       >
-                        <Text style={styles.body}>
+                        <Text className="text-[14px] text-fog">
                           {t.title} · {t.artist}
                         </Text>
                         <Pressable
-                          style={styles.smallBtn}
+                          className="rounded-full border border-line px-2.5 py-[5px]"
                           disabled={busy}
                           onPress={() =>
                             void run(async () => {
@@ -671,14 +658,14 @@ export default function PackDeck() {
                             }, `Added ${t.title} to the queue.`)
                           }
                         >
-                          <Text style={styles.smallBtnText}>Add</Text>
+                          <Text className="text-[12px] font-bold text-accent">Add</Text>
                         </Pressable>
                       </View>
                     ))}
                     {playback?.current_item_id && (
-                      <View style={styles.actionRow}>
+                      <View className="flex-row flex-wrap gap-2">
                         <Pressable
-                          style={styles.smallBtn}
+                          className="rounded-full border border-line px-2.5 py-[5px]"
                           disabled={busy}
                           onPress={() =>
                             void run(async () => {
@@ -689,21 +676,21 @@ export default function PackDeck() {
                             })
                           }
                         >
-                          <Text style={styles.smallBtnText}>
+                          <Text className="text-[12px] font-bold text-accent">
                             {playback.is_playing ? 'Pause' : 'Play'}
                           </Text>
                         </Pressable>
                       </View>
                     )}
                     {queueEntries.length === 0 && (
-                      <Text style={styles.body}>Queue is empty.</Text>
+                      <Text className="text-[14px] text-fog">Queue is empty.</Text>
                     )}
                     {queueEntries.map((entry) => (
                       <View
                         key={entry.item.queue_item_id}
-                        style={styles.actionRow}
+                        className="flex-row flex-wrap gap-2"
                       >
-                        <Text style={styles.body}>
+                        <Text className="text-[14px] text-fog">
                           {entry.item.position}.{' '}
                           {entry.track?.title ?? 'Unknown track'}
                           {entry.track ? ` · ${entry.track.artist}` : ''}
@@ -712,7 +699,7 @@ export default function PackDeck() {
                         </Text>
                         {entry.item.status === 'queued' && (
                           <Pressable
-                            style={styles.smallBtn}
+                            className="rounded-full border border-line px-2.5 py-[5px]"
                             disabled={busy}
                             onPress={() =>
                               void run(async () => {
@@ -743,13 +730,13 @@ export default function PackDeck() {
                               })
                             }
                           >
-                            <Text style={styles.smallBtnText}>Play</Text>
+                            <Text className="text-[12px] font-bold text-accent">Play</Text>
                           </Pressable>
                         )}
                         {(entry.item.status === 'queued' ||
                           entry.item.status === 'playing') && (
                           <Pressable
-                            style={styles.smallBtn}
+                            className="rounded-full border border-line px-2.5 py-[5px]"
                             disabled={busy}
                             onPress={() =>
                               void run(async () => {
@@ -776,7 +763,7 @@ export default function PackDeck() {
                               })
                             }
                           >
-                            <Text style={styles.smallBtnText}>
+                            <Text className="text-[12px] font-bold text-accent">
                               {entry.item.status === 'playing'
                                 ? 'Skip'
                                 : 'Remove'}
@@ -786,36 +773,29 @@ export default function PackDeck() {
                       </View>
                     ))}
                     <TextInput
-                      style={styles.input}
+                      className="rounded-[10px] border border-line bg-ink px-3 py-2.5 text-[14px] text-fog"
                       value={trackTitle}
                       onChangeText={setTrackTitle}
                       placeholder="Track title"
                       placeholderTextColor={MUTED}
                     />
                     <TextInput
-                      style={styles.input}
+                      className="rounded-[10px] border border-line bg-ink px-3 py-2.5 text-[14px] text-fog"
                       value={trackArtist}
                       onChangeText={setTrackArtist}
                       placeholder="Artist"
                       placeholderTextColor={MUTED}
                     />
-                    <View style={styles.segmentRow}>
+                    <View className="flex-row gap-2">
                       {(['apple_music', 'spotify'] as MusicProviderId[]).map(
                         (p) => (
                           <Pressable
                             key={p}
                             onPress={() => setTrackProvider(p)}
-                            style={[
-                              styles.segment,
-                              trackProvider === p && styles.segmentActive,
-                            ]}
+                            className={`rounded-full border border-line px-3 py-1.5 ${trackProvider === p ? 'border-accent bg-accent' : ''}`}
                           >
                             <Text
-                              style={[
-                                styles.segmentText,
-                                trackProvider === p &&
-                                  styles.segmentTextActive,
-                              ]}
+                              className={`text-[12px] font-bold text-muted ${trackProvider === p ? 'text-ink' : ''}`}
                             >
                               {p === 'apple_music' ? 'Apple Music' : 'Spotify'}
                             </Text>
@@ -824,7 +804,7 @@ export default function PackDeck() {
                       )}
                     </View>
                     <TextInput
-                      style={styles.input}
+                      className="rounded-[10px] border border-line bg-ink px-3 py-2.5 text-[14px] text-fog"
                       value={trackProviderId}
                       onChangeText={setTrackProviderId}
                       placeholder="Provider track ID (optional)"
@@ -833,7 +813,7 @@ export default function PackDeck() {
                       autoCorrect={false}
                     />
                     <Pressable
-                      style={[styles.primaryBtn, busy && styles.disabled]}
+                      className={`items-center rounded-[10px] bg-accent py-[11px] ${busy ? 'opacity-60' : ''}`}
                       disabled={busy}
                       onPress={() =>
                         void run(async () => {
@@ -856,23 +836,23 @@ export default function PackDeck() {
                         }, 'Track added to the shared queue.')
                       }
                     >
-                      <Text style={styles.primaryBtnText}>Add to Queue</Text>
+                      <Text className="text-[14px] font-extrabold text-ink">Add to Queue</Text>
                     </Pressable>
                   </View>
                   {isHost && friends.length > 0 && (
-                    <View style={styles.inviteBlock}>
-                      <Text style={styles.subtle}>Invite a friend:</Text>
+                    <View className="gap-1.5 pt-1.5">
+                      <Text className="text-[12px] text-muted">Invite a friend:</Text>
                       {friends.map((f) =>
                         f.friend ? (
                           <Pressable
                             key={f.friend.user_id}
-                            style={styles.smallBtn}
+                            className="rounded-full border border-line px-2.5 py-[5px]"
                             disabled={busy}
                             onPress={() =>
                               handleInviteFriend(session, f.friend!.user_id)
                             }
                           >
-                            <Text style={styles.smallBtnText}>
+                            <Text className="text-[12px] font-bold text-accent">
                               Invite @{f.friend.username}
                             </Text>
                           </Pressable>
@@ -882,21 +862,21 @@ export default function PackDeck() {
                   )}
                 </View>
               )}
-              <View style={styles.actionRow}>
+              <View className="flex-row flex-wrap gap-2">
                 {activeSession?.session_id !== session.session_id &&
                   session.status !== 'completed' &&
                   session.status !== 'cancelled' && (
                     <Pressable
-                      style={styles.smallBtn}
+                      className="rounded-full border border-line px-2.5 py-[5px]"
                       disabled={busy}
                       onPress={() => setActiveSession(session)}
                     >
-                      <Text style={styles.smallBtnText}>Make Active</Text>
+                      <Text className="text-[12px] font-bold text-accent">Make Active</Text>
                     </Pressable>
                   )}
                 {isHost && session.status === 'lobby' && (
                   <Pressable
-                    style={styles.smallBtn}
+                    className="rounded-full border border-line px-2.5 py-[5px]"
                     disabled={busy}
                     onPress={() =>
                       void run(async () => {
@@ -905,14 +885,14 @@ export default function PackDeck() {
                       }, 'Session is live.')
                     }
                   >
-                    <Text style={styles.smallBtnText}>Start</Text>
+                    <Text className="text-[12px] font-bold text-accent">Start</Text>
                   </Pressable>
                 )}
                 {isHost &&
                   (session.status === 'active' ||
                     session.status === 'lobby') && (
                     <Pressable
-                      style={styles.smallBtn}
+                      className="rounded-full border border-line px-2.5 py-[5px]"
                       disabled={busy}
                       onPress={() =>
                         void run(async () => {
@@ -928,16 +908,16 @@ export default function PackDeck() {
                         }, 'Session completed.')
                       }
                     >
-                      <Text style={styles.smallBtnText}>Complete</Text>
+                      <Text className="text-[12px] font-bold text-accent">Complete</Text>
                     </Pressable>
                   )}
                 {!isHost && (
                   <Pressable
-                    style={styles.smallBtn}
+                    className="rounded-full border border-line px-2.5 py-[5px]"
                     disabled={busy}
                     onPress={() => handleLeave(session)}
                   >
-                    <Text style={styles.smallBtnText}>Leave</Text>
+                    <Text className="text-[12px] font-bold text-accent">Leave</Text>
                   </Pressable>
                 )}
               </View>
@@ -947,27 +927,27 @@ export default function PackDeck() {
       </View>
 
       {/* DISCOVER */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>DISCOVER</Text>
+      <View className="gap-2 rounded-[14px] border border-line bg-panel p-3.5">
+        <Text className="mb-1 text-[12px] font-bold tracking-[1.5px] text-accent">DISCOVER</Text>
         {discover.length === 0 && (
-          <Text style={styles.body}>
+          <Text className="text-[14px] text-fog">
             No public or friends sessions open right now.
           </Text>
         )}
         {discover.map((session) => (
-          <View key={session.session_id} style={styles.rowCard}>
-            <View style={styles.rowTop}>
-              <Text style={styles.rowTitle}>{session.title}</Text>
-              <Text style={styles.chip}>{session.status}</Text>
+          <View key={session.session_id} className="gap-1.5 rounded-[10px] border border-line p-2.5">
+            <View className="flex-row items-center justify-between gap-2">
+              <Text className="shrink text-[14px] font-bold text-fog">{session.title}</Text>
+              <Text className="text-[11px] font-bold uppercase text-accent">{session.status}</Text>
             </View>
-            <Text style={styles.subtle}>{session.visibility} session</Text>
-            <View style={styles.actionRow}>
+            <Text className="text-[12px] text-muted">{session.visibility} session</Text>
+            <View className="flex-row flex-wrap gap-2">
               <Pressable
-                style={styles.smallBtn}
+                className="rounded-full border border-line px-2.5 py-[5px]"
                 disabled={busy}
                 onPress={() => handleJoin(session)}
               >
-                <Text style={styles.smallBtnText}>Join</Text>
+                <Text className="text-[12px] font-bold text-accent">Join</Text>
               </Pressable>
             </View>
           </View>
@@ -975,19 +955,19 @@ export default function PackDeck() {
       </View>
 
       {/* INVITES */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>INVITES</Text>
+      <View className="gap-2 rounded-[14px] border border-line bg-panel p-3.5">
+        <Text className="mb-1 text-[12px] font-bold tracking-[1.5px] text-accent">INVITES</Text>
         {invites.length === 0 && (
-          <Text style={styles.body}>No pending invites.</Text>
+          <Text className="text-[14px] text-fog">No pending invites.</Text>
         )}
         {invites.map((invite) => (
-          <View key={invite.invite_id} style={styles.rowCard}>
-            <Text style={styles.rowTitle}>
+          <View key={invite.invite_id} className="gap-1.5 rounded-[10px] border border-line p-2.5">
+            <Text className="shrink text-[14px] font-bold text-fog">
               {inviteSessions[invite.session_id]?.title ?? 'Session invite'}
             </Text>
-            <View style={styles.actionRow}>
+            <View className="flex-row flex-wrap gap-2">
               <Pressable
-                style={styles.smallBtn}
+                className="rounded-full border border-line px-2.5 py-[5px]"
                 disabled={busy}
                 onPress={() =>
                   void run(async () => {
@@ -997,10 +977,10 @@ export default function PackDeck() {
                   }, 'Invite accepted. You are in, and this is your active session.')
                 }
               >
-                <Text style={styles.smallBtnText}>Accept</Text>
+                <Text className="text-[12px] font-bold text-accent">Accept</Text>
               </Pressable>
               <Pressable
-                style={styles.smallBtn}
+                className="rounded-full border border-line px-2.5 py-[5px]"
                 disabled={busy}
                 onPress={() =>
                   void run(async () => {
@@ -1008,7 +988,7 @@ export default function PackDeck() {
                   }, 'Invite declined.')
                 }
               >
-                <Text style={styles.smallBtnText}>Decline</Text>
+                <Text className="text-[12px] font-bold text-accent">Decline</Text>
               </Pressable>
             </View>
           </View>
@@ -1016,17 +996,17 @@ export default function PackDeck() {
       </View>
 
       {/* FRIENDS */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>FRIENDS</Text>
+      <View className="gap-2 rounded-[14px] border border-line bg-panel p-3.5">
+        <Text className="mb-1 text-[12px] font-bold tracking-[1.5px] text-accent">FRIENDS</Text>
         {requests.map((r) =>
           r.friend ? (
-            <View key={r.friend.user_id} style={styles.rowCard}>
-              <Text style={styles.rowTitle}>
+            <View key={r.friend.user_id} className="gap-1.5 rounded-[10px] border border-line p-2.5">
+              <Text className="shrink text-[14px] font-bold text-fog">
                 @{r.friend.username} wants to ride
               </Text>
-              <View style={styles.actionRow}>
+              <View className="flex-row flex-wrap gap-2">
                 <Pressable
-                  style={styles.smallBtn}
+                  className="rounded-full border border-line px-2.5 py-[5px]"
                   disabled={busy}
                   onPress={() =>
                     void run(async () => {
@@ -1038,10 +1018,10 @@ export default function PackDeck() {
                     }, 'Friend added.')
                   }
                 >
-                  <Text style={styles.smallBtnText}>Accept</Text>
+                  <Text className="text-[12px] font-bold text-accent">Accept</Text>
                 </Pressable>
                 <Pressable
-                  style={styles.smallBtn}
+                  className="rounded-full border border-line px-2.5 py-[5px]"
                   disabled={busy}
                   onPress={() =>
                     void run(async () => {
@@ -1053,26 +1033,26 @@ export default function PackDeck() {
                     }, 'Request declined.')
                   }
                 >
-                  <Text style={styles.smallBtnText}>Decline</Text>
+                  <Text className="text-[12px] font-bold text-accent">Decline</Text>
                 </Pressable>
               </View>
             </View>
           ) : null
         )}
         {friends.length === 0 && requests.length === 0 && (
-          <Text style={styles.body}>
+          <Text className="text-[14px] text-fog">
             No friends yet. Search below to find your pack.
           </Text>
         )}
         {friends.map((f) =>
           f.friend ? (
-            <Text key={f.friend.user_id} style={styles.body}>
+            <Text key={f.friend.user_id} className="text-[14px] text-fog">
               @{f.friend.username}
             </Text>
           ) : null
         )}
         <TextInput
-          style={styles.input}
+          className="rounded-[10px] border border-line bg-ink px-3 py-2.5 text-[14px] text-fog"
           value={search}
           onChangeText={setSearch}
           placeholder="Search usernames"
@@ -1081,21 +1061,21 @@ export default function PackDeck() {
           autoCorrect={false}
         />
         <Pressable
-          style={[styles.primaryBtn, busy && styles.disabled]}
+          className={`items-center rounded-[10px] bg-accent py-[11px] ${busy ? 'opacity-60' : ''}`}
           onPress={handleSearch}
           disabled={busy}
         >
-          <Text style={styles.primaryBtnText}>Search</Text>
+          <Text className="text-[14px] font-extrabold text-ink">Search</Text>
         </Pressable>
         {searchResults.map((p) => (
-          <View key={p.user_id} style={styles.rowCard}>
-            <View style={styles.rowTop}>
-              <Text style={styles.rowTitle}>@{p.username}</Text>
+          <View key={p.user_id} className="gap-1.5 rounded-[10px] border border-line p-2.5">
+            <View className="flex-row items-center justify-between gap-2">
+              <Text className="shrink text-[14px] font-bold text-fog">@{p.username}</Text>
               {friendIds.has(p.user_id) ? (
-                <Text style={styles.chip}>friends</Text>
+                <Text className="text-[11px] font-bold uppercase text-accent">friends</Text>
               ) : (
                 <Pressable
-                  style={styles.smallBtn}
+                  className="rounded-full border border-line px-2.5 py-[5px]"
                   disabled={busy}
                   onPress={() =>
                     void run(async () => {
@@ -1103,107 +1083,14 @@ export default function PackDeck() {
                     }, `Request sent to @${p.username}.`)
                   }
                 >
-                  <Text style={styles.smallBtnText}>Add</Text>
+                  <Text className="text-[12px] font-bold text-accent">Add</Text>
                 </Pressable>
               )}
             </View>
           </View>
         ))}
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { gap: 14 },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    color: TEXT,
-    fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-  },
-  card: {
-    backgroundColor: CARD,
-    borderColor: BORDER,
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 14,
-    gap: 8,
-  },
-  cardTitle: {
-    color: ACCENT,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-    marginBottom: 4,
-  },
-  body: { color: TEXT, fontSize: 14 },
-  subtle: { color: MUTED, fontSize: 12 },
-  errorText: { color: DANGER, fontSize: 13 },
-  infoText: { color: ACCENT, fontSize: 13 },
-  input: {
-    backgroundColor: BG,
-    borderColor: BORDER,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: TEXT,
-    fontSize: 14,
-  },
-  segmentRow: { flexDirection: 'row', gap: 8 },
-  segment: {
-    borderWidth: 1,
-    borderColor: BORDER,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  segmentActive: { backgroundColor: ACCENT, borderColor: ACCENT },
-  segmentText: { color: MUTED, fontSize: 12, fontWeight: '700' },
-  segmentTextActive: { color: BG },
-  primaryBtn: {
-    backgroundColor: ACCENT,
-    borderRadius: 10,
-    paddingVertical: 11,
-    alignItems: 'center',
-  },
-  primaryBtnText: { color: BG, fontSize: 14, fontWeight: '800' },
-  disabled: { opacity: 0.6 },
-  rowCard: {
-    borderWidth: 1,
-    borderColor: BORDER,
-    borderRadius: 10,
-    padding: 10,
-    gap: 6,
-  },
-  rowTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 8,
-  },
-  rowTitle: { color: TEXT, fontSize: 14, fontWeight: '700', flexShrink: 1 },
-  chip: {
-    color: ACCENT,
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-  },
-  actionRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  smallBtn: {
-    borderWidth: 1,
-    borderColor: BORDER,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  smallBtnText: { color: ACCENT, fontSize: 12, fontWeight: '700' },
-  detailBlock: { gap: 4, paddingTop: 4 },
-  inviteBlock: { gap: 6, paddingTop: 6 },
-});
