@@ -64,6 +64,9 @@ import {
 } from './services/spotifySyncService';
 import { walkieTalkieController } from './services/liveKitVoiceService';
 import { startDeviceGpsTracking } from './services/locationTelemetryService';
+import { AuthProvider } from './auth/AuthProvider';
+import AuthGate from './auth/AuthGate';
+import AccountButton from './auth/AccountButton';
 
 export type BottomTabId = 'cockpit' | 'map' | 'ptt' | 'spotify' | 'architecture';
 
@@ -114,7 +117,7 @@ function formatNowTimestamp(): string {
   return `${hh}:${mm}:${ss}.${ms}`;
 }
 
-export default function App() {
+function PacelockApp() {
   // Core Mode: 'run' ("Run Together") vs 'ride' ("Ride Together")
   const [mode, setMode] = useState<ActivityMode>('run');
   const [activeTab, setActiveTab] = useState<BottomTabId>('cockpit');
@@ -527,6 +530,7 @@ export default function App() {
 
             {/* Right Controls: Sim Play/Pause, Device GPS toggle, Reset */}
             <View style={styles.headerActions}>
+              <AccountButton />
               <Pressable
                 onPress={() => setIsSimRunning((v) => !v)}
                 style={styles.iconPillBtn}
@@ -1069,6 +1073,23 @@ export default function App() {
         </View>
       </SafeAreaView>
     </SafeAreaProvider>
+  );
+}
+
+
+/**
+ * Root component: authentication wraps the whole app. AuthGate shows
+ * the sign-in flow until a Supabase session exists (or passes through
+ * when Supabase is not configured), and PacelockApp is the original
+ * five-tab shell.
+ */
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthGate>
+        <PacelockApp />
+      </AuthGate>
+    </AuthProvider>
   );
 }
 
