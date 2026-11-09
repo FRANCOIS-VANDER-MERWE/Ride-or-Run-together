@@ -248,3 +248,42 @@ export async function fetchSessionQueueWithTracks(
     return { item: item as SessionQueueRow, track: track ?? null };
   });
 }
+
+/**
+ * Publishes a now-playing track from a device player (the Music Sync
+ * tab) into a session's shared queue: finds or creates the queue item
+ * for the track, marks the previously playing item played, marks this
+ * one playing, and points the shared playback state at it. This is
+ * how a song queued on one rider's phone becomes the pack's song.
+ */
+export async function publishNowPlaying(
+  sessionId: string,
+  userId: string,
+  input: ProviderTrackInput
+): Promise<void> {
+  const trackRow = await upsertTrack(input);
+  const queue = await fetchSessionQueue(sessionId);
+  let item = queue.find(
+    (q) =>
+      q.track_id === trackRow.track_id &&
+      (q.status === 'queued' || q.status === 'playing')
+  );
+  if (!item) {
+    item = await enqueueTrack(sessionId, userId, input);
+  }
+  const previous = queue.find(
+    (q) => q.status === 'playing' && q.queue_item_id !== item.queue_item_id
+  );
+  if (previous) {
+    await setQueueItemStatus(previous.queue_item_id, 'played');
+  }
+  if (item.status !== 'playing') {
+    await setQueueItemStatus(item.queue_item_id, 'playing');
+  }
+  await updatePlaybackState(sessionId, {
+    current_item_id: item.queue_item_id,
+    is_playing: true,
+    position_ms: 0,
+    dj_user_id: userId,
+  });
+}

@@ -51,6 +51,9 @@ import {
   SpotifyTrack,
 } from '../data/sessionData';
 import { audioEngine } from '../music/audioEngine';
+import { useAuth } from '../auth/AuthProvider';
+import { useActiveSession } from '../session/ActiveSessionContext';
+import { publishNowPlaying, updatePlaybackState } from '../services/musicDataService';
 import { appleMusicProvider } from '../music/providers/AppleMusicProvider';
 import {
   AuthState,
@@ -109,6 +112,33 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
   // Apple Music only (Nov 9, 2026). providerId stays as a constant so
   // the render code below keeps its shape for an easy Spotify revival.
   const providerId: ProviderId = 'apple';
+
+  // Pack publishing: plays in this tab also queue into the active
+  // session's shared queue, so the rest of the pack sees the song.
+  const auth = useAuth();
+  const { activeSession } = useActiveSession();
+  const lastPublishedRef = useRef<string | null>(null);
+  const publishToPack = (track: CanonicalTrack) => {
+    const sessionId = activeSession?.session_id;
+    const userId = auth.user?.id;
+    if (!sessionId || !userId) return;
+    const key = `${sessionId}:${track.providerIds.apple ?? track.isrc ?? track.title}`;
+    if (lastPublishedRef.current === key) return;
+    lastPublishedRef.current = key;
+    void publishNowPlaying(sessionId, userId, {
+      provider: 'apple_music',
+      providerTrackId:
+        track.providerIds.apple ??
+        (track.isrc ? `isrc:${track.isrc}` : `manual-${Date.now()}`),
+      title: track.title,
+      artist: track.artist,
+      album: track.album ?? undefined,
+      durationMs: track.durationMs ?? undefined,
+      artworkUrl: track.artworkUrl ?? undefined,
+    }).catch(() => {
+      lastPublishedRef.current = null;
+    });
+  };
   const provider = appleMusicProvider;
   const accent = PROVIDER_COLORS[providerId];
 
@@ -209,6 +239,7 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
     try {
       await provider.playTrack(track, 0);
       setCurrent(track);
+      publishToPack(track);
       setCurrentResultIndex(index);
       const snap = await provider.getSnapshot();
       setSnapshot(snap);
@@ -224,12 +255,19 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
   const handleToggle = async () => {
     if (!current) return;
     try {
-      if (snapshot?.isPlaying) {
+      const pausing = !!snapshot?.isPlaying;
+      if (pausing) {
         await provider.pause();
       } else {
         await provider.resume();
       }
       setSnapshot(await provider.getSnapshot());
+      if (activeSession && auth.user) {
+        void updatePlaybackState(activeSession.session_id, {
+          is_playing: !pausing,
+          dj_user_id: auth.user.id,
+        }).catch(() => {});
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Playback control failed.');
     }
@@ -282,6 +320,17 @@ export default function SpotifySyncDeck(props: SpotifySyncDeckProps) {
           MUSIC · APPLE MUSIC
         </Text>
       </View>
+      {activeSession ? (
+        <Text style={styles.packLine}>
+          Pack session: {activeSession.title}. Songs you play here queue
+          for the whole pack.
+        </Text>
+      ) : (
+        <Text style={styles.packLineMuted}>
+          No active pack session. Set one in the Pack tab and songs you
+          play here will queue for the group.
+        </Text>
+      )}
       {/* connection card */}
       <View style={styles.card}>
         {activeAuth?.isConnected ? (
@@ -486,6 +535,20 @@ const styles = StyleSheet.create({
   root: { gap: 12 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   headerLabel: { fontFamily: MONO_FONT, fontSize: 12, letterSpacing: 1.5 },
+  packLine: {
+    fontFamily: MONO_FONT,
+    fontSize: 11,
+    color: '#34D399',
+    marginTop: 6,
+    lineHeight: 15,
+  },
+  packLineMuted: {
+    fontFamily: MONO_FONT,
+    fontSize: 11,
+    color: '#8A93A6',
+    marginTop: 6,
+    lineHeight: 15,
+  },
   pillsRow: { flexDirection: 'row', gap: 8 },
   pill: {
     flexDirection: 'row',

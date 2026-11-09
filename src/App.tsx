@@ -68,8 +68,9 @@ import { startDeviceGpsTracking } from './services/locationTelemetryService';
 import { AuthProvider } from './auth/AuthProvider';
 import AuthGate from './auth/AuthGate';
 import AccountButton from './auth/AccountButton';
+import { ActiveSessionProvider } from './session/ActiveSessionContext';
 
-export type BottomTabId = 'cockpit' | 'map' | 'ptt' | 'spotify' | 'architecture' | 'pack';
+export type BottomTabId = 'cockpit' | 'map' | 'ptt' | 'music' | 'architecture' | 'pack';
 
 const MONO_FONT = Platform.select({
   ios: 'Menlo',
@@ -519,7 +520,7 @@ function PacelockApp() {
                   <Text style={styles.brandTitle}>PACELOCK</Text>
                   <View style={styles.stackTag}>
                     <Text style={styles.stackTagText}>
-                      EXPO · SUPABASE · LIVEKIT · SPOTIFY
+                      EXPO · SUPABASE · LIVEKIT · MUSIC SYNC
                     </Text>
                   </View>
                 </View>
@@ -832,11 +833,11 @@ function PacelockApp() {
                     <Text
                       style={[styles.quickDeckTitle, { color: '#1DB954' }]}
                     >
-                      SPOTIFY PACK SYNC · {currentTrack.bpm} BPM LOCKED
+                      MUSIC PACK SYNC · {currentTrack.bpm} BPM LOCKED
                     </Text>
                   </View>
                   <Pressable
-                    onPress={() => setActiveTab('spotify')}
+                    onPress={() => setActiveTab('music')}
                     style={styles.jumpTabLink}
                   >
                     <Text
@@ -937,8 +938,8 @@ function PacelockApp() {
             </View>
           )}
 
-          {/* TAB 4: GROUP MUSIC SYNC & PROVIDER INTERFACE */}
-          {activeTab === 'spotify' && (
+          {/* TAB 4: MUSIC SYNC, APPLE MUSIC PLAYER AND PACK QUEUE PUBLISHING */}
+          {activeTab === 'music' && (
             <View style={styles.tabSection}>
               <SpotifySyncDeck
                 mode={mode}
@@ -1040,8 +1041,8 @@ function PacelockApp() {
                 activeColor: '#FF4D2A',
               },
               {
-                id: 'spotify',
-                label: 'Spotify Sync',
+                id: 'music',
+                label: 'Music Sync',
                 icon: Music2,
                 activeColor: '#1DB954',
               },
@@ -1102,9 +1103,11 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <AuthGate>
-          <PacelockApp />
-        </AuthGate>
+        <ActiveSessionProvider>
+          <AuthGate>
+            <PacelockApp />
+          </AuthGate>
+        </ActiveSessionProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

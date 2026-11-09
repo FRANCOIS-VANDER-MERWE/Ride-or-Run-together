@@ -22,6 +22,7 @@ import {
   View,
 } from 'react-native';
 import { useAuth } from '../auth/AuthProvider';
+import { useActiveSession } from '../session/ActiveSessionContext';
 import type {
   ProfileRow,
   RideSessionRow,
@@ -91,6 +92,7 @@ const VISIBILITIES: SessionVisibility[] = ['private', 'friends', 'public'];
 
 export default function PackDeck() {
   const auth = useAuth();
+  const { activeSession, setActiveSession } = useActiveSession();
   const myId = auth.user?.id ?? null;
 
   const [loading, setLoading] = useState(true);
@@ -332,10 +334,11 @@ export default function PackDeck() {
       if (newTitle.trim().length < 3) {
         throw new Error('Give the session a title of 3+ characters.');
       }
-      await createSession(myId, {
+      const created = await createSession(myId, {
         title: newTitle.trim(),
         visibility: newVisibility,
       });
+      setActiveSession(created);
       setNewTitle('');
     }, 'Session created. It starts in the lobby.');
 
@@ -343,12 +346,16 @@ export default function PackDeck() {
     run(async () => {
       if (!myId) throw new Error('Not signed in.');
       await joinSession(session.session_id, myId);
-    }, `Joined ${session.title}.`);
+      setActiveSession(session);
+    }, `Joined ${session.title}. It is now your active session.`);
 
   const handleLeave = (session: RideSessionRow) =>
     run(async () => {
       if (!myId) throw new Error('Not signed in.');
       await setMyParticipantStatus(session.session_id, myId, 'left');
+      if (activeSession?.session_id === session.session_id) {
+        setActiveSession(null);
+      }
     }, `Left ${session.title}.`);
 
   const handleInviteFriend = (session: RideSessionRow, friendId: string) =>
@@ -479,6 +486,9 @@ export default function PackDeck() {
                 <Text style={styles.subtle}>
                   {session.visibility}
                   {isHost ? ' · you host' : ' · guest'}
+                  {activeSession?.session_id === session.session_id
+                    ? ' · ACTIVE'
+                    : ''}
                   {' · tap for riders'}
                 </Text>
               </Pressable>
@@ -757,6 +767,17 @@ export default function PackDeck() {
                 </View>
               )}
               <View style={styles.actionRow}>
+                {activeSession?.session_id !== session.session_id &&
+                  session.status !== 'completed' &&
+                  session.status !== 'cancelled' && (
+                    <Pressable
+                      style={styles.smallBtn}
+                      disabled={busy}
+                      onPress={() => setActiveSession(session)}
+                    >
+                      <Text style={styles.smallBtnText}>Make Active</Text>
+                    </Pressable>
+                  )}
                 {isHost && session.status === 'lobby' && (
                   <Pressable
                     style={styles.smallBtn}
@@ -782,6 +803,11 @@ export default function PackDeck() {
                             session.session_id,
                             'completed'
                           );
+                          if (
+                            activeSession?.session_id === session.session_id
+                          ) {
+                            setActiveSession(null);
+                          }
                         }, 'Session completed.')
                       }
                     >
