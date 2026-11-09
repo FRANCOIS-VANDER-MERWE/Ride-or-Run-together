@@ -53,6 +53,7 @@ import TacticalRouteMap from './components/TacticalRouteMap';
 import WalkieTalkiePTTDeck from './components/WalkieTalkiePTTDeck';
 import SpotifySyncDeck from './components/SpotifySyncDeck';
 import ArchitectureBlueprintView from './components/ArchitectureBlueprintModal';
+import PackDeck from './components/PackDeck';
 import {
   playPttCloseSquelch,
   playPttOpenChirp,
@@ -68,7 +69,7 @@ import { AuthProvider } from './auth/AuthProvider';
 import AuthGate from './auth/AuthGate';
 import AccountButton from './auth/AccountButton';
 
-export type BottomTabId = 'cockpit' | 'map' | 'ptt' | 'spotify' | 'architecture';
+export type BottomTabId = 'cockpit' | 'map' | 'ptt' | 'spotify' | 'architecture' | 'pack';
 
 const MONO_FONT = Platform.select({
   ios: 'Menlo',
@@ -1006,6 +1007,13 @@ function PacelockApp() {
               <ArchitectureBlueprintView />
             </View>
           )}
+
+          {/* TAB 6: PACK, LIVE SUPABASE SESSIONS AND FRIENDS */}
+          {activeTab === 'pack' && (
+            <View style={styles.tabSection}>
+              <PackDeck />
+            </View>
+          )}
         </ScrollView>
 
         {/* BOTTOM MOBILE TAB NAVIGATION BAR */}
@@ -1041,6 +1049,12 @@ function PacelockApp() {
                 label: 'Stack Spec',
                 icon: Layers,
                 activeColor: '#D4FF00',
+              },
+              {
+                id: 'pack',
+                label: 'Pack',
+                icon: Zap,
+                activeColor: '#34D399',
               },
             ] as const
           ).map((tab) => {

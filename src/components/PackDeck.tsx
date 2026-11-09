@@ -1,0 +1,662 @@
+/**
+ * PackDeck: the live-backend tab. Everything here runs against the
+ * real Supabase schema through src/services (sessionsService,
+ * friendsService, profilesService):
+ *
+ * - My sessions, with participants and host lifecycle controls
+ * - Create a session (title plus visibility)
+ * - Discover public and friends sessions and join them
+ * - Session invites inbox (accept joins the session)
+ * - Friends: list, incoming requests, and username search
+ *
+ * It renders inside the app shell's ScrollView, so it owns no scroll
+ * container of its own.
+ */
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { useAuth } from '../auth/AuthProvider';
+import type {
+  ProfileRow,
+  RideSessionRow,
+  SessionInviteRow,
+  SessionParticipantRow,
+  SessionVisibility,
+} from '../services/database.types';
+import {
+  createSession,
+  fetchDiscoverableSessions,
+  fetchMyInvites,
+  fetchMySessions,
+  fetchParticipants,
+  fetchSession,
+  joinSession,
+  respondToInvite,
+  setMyParticipantStatus,
+  setSessionStatus,
+  sendInvite,
+} from '../services/sessionsService';
+import {
+  fetchFriends,
+  fetchIncomingRequests,
+  respondToFriendRequest,
+  sendFriendRequest,
+  type FriendWithProfile,
+} from '../services/friendsService';
+import {
+  fetchProfile,
+  searchProfilesByUsername,
+} from '../services/profilesService';
+
+const ACCENT = '#34D399';
+const BG = '#080B10';
+const CARD = '#0D1420';
+const BORDER = '#1E293B';
+const TEXT = '#E2E8F0';
+const MUTED = '#94A3B8';
+const DANGER = '#F87171';
+
+const VISIBILITIES: SessionVisibility[] = ['private', 'friends', 'public'];
+
+export default function PackDeck() {
+  const auth = useAuth();
+  const myId = auth.user?.id ?? null;
+
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  const [mySessions, setMySessions] = useState<RideSessionRow[]>([]);
+  const [discover, setDiscover] = useState<RideSessionRow[]>([]);
+  const [invites, setInvites] = useState<SessionInviteRow[]>([]);
+  const [inviteSessions, setInviteSessions] = useState<
+    Record<string, RideSessionRow | null>
+  >({});
+  const [friends, setFriends] = useState<FriendWithProfile[]>([]);
+  const [requests, setRequests] = useState<FriendWithProfile[]>([]);
+
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [participants, setParticipants] = useState<SessionParticipantRow[]>([]);
+  const [names, setNames] = useState<Record<string, string>>({});
+
+  const [newTitle, setNewTitle] = useState('');
+  const [newVisibility, setNewVisibility] =
+    useState<SessionVisibility>('friends');
+  const [search, setSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<ProfileRow[]>([]);
+
+  const refresh = useCallback(async () => {
+    if (!myId) return;
+    try {
+      const [mine, disc, inv, fr, req] = await Promise.all([
+        fetchMySessions(myId),
+        fetchDiscoverableSessions(),
+        fetchMyInvites(myId),
+        fetchFriends(myId),
+        fetchIncomingRequests(myId),
+      ]);
+      setMySessions(mine);
+      const myIds = new Set(mine.map((s) => s.session_id));
+      setDiscover(disc.filter((s) => !myIds.has(s.session_id)));
+      setInvites(inv);
+      setFriends(fr);
+      setRequests(req);
+      const sessionMap: Record<string, RideSessionRow | null> = {};
+      for (const invite of inv) {
+        sessionMap[invite.session_id] = await fetchSession(invite.session_id);
+      }
+      setInviteSessions(sessionMap);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load.');
+    } finally {
+      setLoading(false);
+    }
+  }, [myId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const run = async (fn: () => Promise<void>, done?: string) => {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await fn();
+      if (done) setInfo(done);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Action failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleExpand = async (session: RideSessionRow) => {
+    if (expandedId === session.session_id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(session.session_id);
+    setParticipants([]);
+    try {
+      const rows = await fetchParticipants(session.session_id);
+      setParticipants(rows);
+      const map: Record<string, string> = { ...names };
+      for (const row of rows) {
+        if (!map[row.user_id]) {
+          const profile = await fetchProfile(row.user_id);
+          map[row.user_id] = profile?.username ?? row.user_id.slice(0, 8);
+        }
+      }
+      setNames(map);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load riders.');
+    }
+  };
+
+  const handleCreate = () =>
+    run(async () => {
+      if (!myId) throw new Error('Not signed in.');
+      if (newTitle.trim().length < 3) {
+        throw new Error('Give the session a title of 3+ characters.');
+      }
+      await createSession(myId, {
+        title: newTitle.trim(),
+        visibility: newVisibility,
+      });
+      setNewTitle('');
+    }, 'Session created. It starts in the lobby.');
+
+  const handleJoin = (session: RideSessionRow) =>
+    run(async () => {
+      if (!myId) throw new Error('Not signed in.');
+      await joinSession(session.session_id, myId);
+    }, `Joined ${session.title}.`);
+
+  const handleLeave = (session: RideSessionRow) =>
+    run(async () => {
+      if (!myId) throw new Error('Not signed in.');
+      await setMyParticipantStatus(session.session_id, myId, 'left');
+    }, `Left ${session.title}.`);
+
+  const handleInviteFriend = (session: RideSessionRow, friendId: string) =>
+    run(async () => {
+      if (!myId) throw new Error('Not signed in.');
+      await sendInvite(session.session_id, myId, friendId);
+    }, 'Invite sent.');
+
+  const friendIds = useMemo(
+    () =>
+      new Set(
+        friends
+          .map((f) => f.friend?.user_id)
+          .filter((id): id is string => Boolean(id))
+      ),
+    [friends]
+  );
+
+  const handleSearch = () =>
+    run(async () => {
+      if (search.trim().length < 2) {
+        throw new Error('Type at least 2 characters to search.');
+      }
+      const results = await searchProfilesByUsername(search.trim());
+      setSearchResults(results.filter((p) => p.user_id !== myId));
+    });
+
+  if (!auth.configured) {
+    return (
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>PACK · BACKEND OFFLINE</Text>
+        <Text style={styles.body}>
+          Supabase env vars are not set, so live sessions and friends are
+          unavailable. Add EXPO_PUBLIC_SUPABASE_URL and
+          EXPO_PUBLIC_SUPABASE_ANON_KEY to .env and restart.
+        </Text>
+      </View>
+    );
+  }
+
+  if (!myId) {
+    return (
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>PACK</Text>
+        <Text style={styles.body}>Sign in to see your pack.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.root}>
+      <View style={styles.headerRow}>
+        <Text style={styles.headerTitle}>PACK · LIVE BACKEND</Text>
+        <Pressable
+          onPress={() => void refresh()}
+          style={styles.smallBtn}
+          disabled={busy}
+        >
+          <Text style={styles.smallBtnText}>Refresh</Text>
+        </Pressable>
+      </View>
+      <Text style={styles.subtle}>
+        Signed in as @{auth.profile?.username ?? '...'}
+      </Text>
+
+      {error && <Text style={styles.errorText}>{error}</Text>}
+      {info && <Text style={styles.infoText}>{info}</Text>}
+      {loading && <ActivityIndicator color={ACCENT} />}
+
+      {/* CREATE SESSION */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>CREATE SESSION</Text>
+        <TextInput
+          style={styles.input}
+          value={newTitle}
+          onChangeText={setNewTitle}
+          placeholder="Saturday ridge loop"
+          placeholderTextColor={MUTED}
+        />
+        <View style={styles.segmentRow}>
+          {VISIBILITIES.map((v) => (
+            <Pressable
+              key={v}
+              onPress={() => setNewVisibility(v)}
+              style={[
+                styles.segment,
+                newVisibility === v && styles.segmentActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.segmentText,
+                  newVisibility === v && styles.segmentTextActive,
+                ]}
+              >
+                {v}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        <Pressable
+          style={[styles.primaryBtn, busy && styles.disabled]}
+          onPress={handleCreate}
+          disabled={busy}
+        >
+          <Text style={styles.primaryBtnText}>Create Session</Text>
+        </Pressable>
+      </View>
+
+      {/* MY SESSIONS */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>MY SESSIONS</Text>
+        {mySessions.length === 0 && (
+          <Text style={styles.body}>
+            No sessions yet. Create one above or join from Discover.
+          </Text>
+        )}
+        {mySessions.map((session) => {
+          const isHost = session.host_id === myId;
+          const expanded = expandedId === session.session_id;
+          return (
+            <View key={session.session_id} style={styles.rowCard}>
+              <Pressable onPress={() => void toggleExpand(session)}>
+                <View style={styles.rowTop}>
+                  <Text style={styles.rowTitle}>{session.title}</Text>
+                  <Text style={styles.chip}>{session.status}</Text>
+                </View>
+                <Text style={styles.subtle}>
+                  {session.visibility}
+                  {isHost ? ' · you host' : ' · guest'}
+                  {' · tap for riders'}
+                </Text>
+              </Pressable>
+              {expanded && (
+                <View style={styles.detailBlock}>
+                  {participants.length === 0 && (
+                    <Text style={styles.body}>Loading riders...</Text>
+                  )}
+                  {participants.map((p) => (
+                    <Text key={p.user_id} style={styles.body}>
+                      @{names[p.user_id] ?? p.user_id.slice(0, 8)} · {p.role}
+                      {' · '}
+                      {p.status}
+                    </Text>
+                  ))}
+                  {isHost && friends.length > 0 && (
+                    <View style={styles.inviteBlock}>
+                      <Text style={styles.subtle}>Invite a friend:</Text>
+                      {friends.map((f) =>
+                        f.friend ? (
+                          <Pressable
+                            key={f.friend.user_id}
+                            style={styles.smallBtn}
+                            disabled={busy}
+                            onPress={() =>
+                              handleInviteFriend(session, f.friend!.user_id)
+                            }
+                          >
+                            <Text style={styles.smallBtnText}>
+                              Invite @{f.friend.username}
+                            </Text>
+                          </Pressable>
+                        ) : null
+                      )}
+                    </View>
+                  )}
+                </View>
+              )}
+              <View style={styles.actionRow}>
+                {isHost && session.status === 'lobby' && (
+                  <Pressable
+                    style={styles.smallBtn}
+                    disabled={busy}
+                    onPress={() =>
+                      void run(async () => {
+                        await setSessionStatus(session.session_id, 'active');
+                      }, 'Session is live.')
+                    }
+                  >
+                    <Text style={styles.smallBtnText}>Start</Text>
+                  </Pressable>
+                )}
+                {isHost &&
+                  (session.status === 'active' ||
+                    session.status === 'lobby') && (
+                    <Pressable
+                      style={styles.smallBtn}
+                      disabled={busy}
+                      onPress={() =>
+                        void run(async () => {
+                          await setSessionStatus(
+                            session.session_id,
+                            'completed'
+                          );
+                        }, 'Session completed.')
+                      }
+                    >
+                      <Text style={styles.smallBtnText}>Complete</Text>
+                    </Pressable>
+                  )}
+                {!isHost && (
+                  <Pressable
+                    style={styles.smallBtn}
+                    disabled={busy}
+                    onPress={() => handleLeave(session)}
+                  >
+                    <Text style={styles.smallBtnText}>Leave</Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      {/* DISCOVER */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>DISCOVER</Text>
+        {discover.length === 0 && (
+          <Text style={styles.body}>
+            No public or friends sessions open right now.
+          </Text>
+        )}
+        {discover.map((session) => (
+          <View key={session.session_id} style={styles.rowCard}>
+            <View style={styles.rowTop}>
+              <Text style={styles.rowTitle}>{session.title}</Text>
+              <Text style={styles.chip}>{session.status}</Text>
+            </View>
+            <Text style={styles.subtle}>{session.visibility} session</Text>
+            <View style={styles.actionRow}>
+              <Pressable
+                style={styles.smallBtn}
+                disabled={busy}
+                onPress={() => handleJoin(session)}
+              >
+                <Text style={styles.smallBtnText}>Join</Text>
+              </Pressable>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      {/* INVITES */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>INVITES</Text>
+        {invites.length === 0 && (
+          <Text style={styles.body}>No pending invites.</Text>
+        )}
+        {invites.map((invite) => (
+          <View key={invite.invite_id} style={styles.rowCard}>
+            <Text style={styles.rowTitle}>
+              {inviteSessions[invite.session_id]?.title ?? 'Session invite'}
+            </Text>
+            <View style={styles.actionRow}>
+              <Pressable
+                style={styles.smallBtn}
+                disabled={busy}
+                onPress={() =>
+                  void run(async () => {
+                    await respondToInvite(invite, 'accepted');
+                  }, 'Invite accepted. You are in.')
+                }
+              >
+                <Text style={styles.smallBtnText}>Accept</Text>
+              </Pressable>
+              <Pressable
+                style={styles.smallBtn}
+                disabled={busy}
+                onPress={() =>
+                  void run(async () => {
+                    await respondToInvite(invite, 'declined');
+                  }, 'Invite declined.')
+                }
+              >
+                <Text style={styles.smallBtnText}>Decline</Text>
+              </Pressable>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      {/* FRIENDS */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>FRIENDS</Text>
+        {requests.map((r) =>
+          r.friend ? (
+            <View key={r.friend.user_id} style={styles.rowCard}>
+              <Text style={styles.rowTitle}>
+                @{r.friend.username} wants to ride
+              </Text>
+              <View style={styles.actionRow}>
+                <Pressable
+                  style={styles.smallBtn}
+                  disabled={busy}
+                  onPress={() =>
+                    void run(async () => {
+                      await respondToFriendRequest(
+                        myId,
+                        r.friend!.user_id,
+                        true
+                      );
+                    }, 'Friend added.')
+                  }
+                >
+                  <Text style={styles.smallBtnText}>Accept</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.smallBtn}
+                  disabled={busy}
+                  onPress={() =>
+                    void run(async () => {
+                      await respondToFriendRequest(
+                        myId,
+                        r.friend!.user_id,
+                        false
+                      );
+                    }, 'Request declined.')
+                  }
+                >
+                  <Text style={styles.smallBtnText}>Decline</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null
+        )}
+        {friends.length === 0 && requests.length === 0 && (
+          <Text style={styles.body}>
+            No friends yet. Search below to find your pack.
+          </Text>
+        )}
+        {friends.map((f) =>
+          f.friend ? (
+            <Text key={f.friend.user_id} style={styles.body}>
+              @{f.friend.username}
+            </Text>
+          ) : null
+        )}
+        <TextInput
+          style={styles.input}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search usernames"
+          placeholderTextColor={MUTED}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <Pressable
+          style={[styles.primaryBtn, busy && styles.disabled]}
+          onPress={handleSearch}
+          disabled={busy}
+        >
+          <Text style={styles.primaryBtnText}>Search</Text>
+        </Pressable>
+        {searchResults.map((p) => (
+          <View key={p.user_id} style={styles.rowCard}>
+            <View style={styles.rowTop}>
+              <Text style={styles.rowTitle}>@{p.username}</Text>
+              {friendIds.has(p.user_id) ? (
+                <Text style={styles.chip}>friends</Text>
+              ) : (
+                <Pressable
+                  style={styles.smallBtn}
+                  disabled={busy}
+                  onPress={() =>
+                    void run(async () => {
+                      await sendFriendRequest(myId, p.user_id);
+                    }, `Request sent to @${p.username}.`)
+                  }
+                >
+                  <Text style={styles.smallBtnText}>Add</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { gap: 14 },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    color: TEXT,
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+  },
+  card: {
+    backgroundColor: CARD,
+    borderColor: BORDER,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    gap: 8,
+  },
+  cardTitle: {
+    color: ACCENT,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+    marginBottom: 4,
+  },
+  body: { color: TEXT, fontSize: 14 },
+  subtle: { color: MUTED, fontSize: 12 },
+  errorText: { color: DANGER, fontSize: 13 },
+  infoText: { color: ACCENT, fontSize: 13 },
+  input: {
+    backgroundColor: BG,
+    borderColor: BORDER,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: TEXT,
+    fontSize: 14,
+  },
+  segmentRow: { flexDirection: 'row', gap: 8 },
+  segment: {
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  segmentActive: { backgroundColor: ACCENT, borderColor: ACCENT },
+  segmentText: { color: MUTED, fontSize: 12, fontWeight: '700' },
+  segmentTextActive: { color: BG },
+  primaryBtn: {
+    backgroundColor: ACCENT,
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  primaryBtnText: { color: BG, fontSize: 14, fontWeight: '800' },
+  disabled: { opacity: 0.6 },
+  rowCard: {
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 10,
+    padding: 10,
+    gap: 6,
+  },
+  rowTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  rowTitle: { color: TEXT, fontSize: 14, fontWeight: '700', flexShrink: 1 },
+  chip: {
+    color: ACCENT,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  actionRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  smallBtn: {
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  smallBtnText: { color: ACCENT, fontSize: 12, fontWeight: '700' },
+  detailBlock: { gap: 4, paddingTop: 4 },
+  inviteBlock: { gap: 6, paddingTop: 6 },
+});
