@@ -12,6 +12,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Image,
+  Platform,
   Pressable,
   Text,
   TextInput,
@@ -274,12 +275,57 @@ export default function RoutePlanner({
     setCenter(pt);
   };
 
-  const handleTap = (e: GestureResponderEvent) => {
-    const { locationX, locationY } = e.nativeEvent;
-    if (locationX === undefined || locationY === undefined) return;
+  const pressStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const placeAt = (locationX: number, locationY: number) => {
     const wx = lngToX(center.lng, zoom) - size.w / 2 + locationX;
     const wy = latToY(center.lat, zoom) - size.h / 2 + locationY;
     assignPoint({ lat: yToLat(wy, zoom), lng: xToLng(wx, zoom) });
+  };
+
+  const handlePressGrant = (e: GestureResponderEvent) => {
+    const { locationX, locationY } = e.nativeEvent;
+    pressStartRef.current =
+      typeof locationX === 'number' && typeof locationY === 'number'
+        ? { x: locationX, y: locationY }
+        : null;
+  };
+
+  const placeAtRef = useRef(placeAt);
+  placeAtRef.current = placeAt;
+  const overlayRef = useRef<any>(null);
+  const lastResponderPlaceRef = useRef(0);
+
+  // Web fallback: a plain DOM click listener on the overlay, using the
+  // offsetX and offsetY the browser reports for the click. Skipped when
+  // the responder path just placed a point, so the two never double up.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const node = overlayRef.current as unknown as HTMLElement | null;
+    if (!node || typeof node.addEventListener !== 'function') return;
+    const onClick = (ev: MouseEvent) => {
+      if (Date.now() - lastResponderPlaceRef.current < 350) return;
+      placeAtRef.current(ev.offsetX, ev.offsetY);
+    };
+    node.addEventListener('click', onClick);
+    return () => node.removeEventListener('click', onClick);
+  }, []);
+
+  const handlePressRelease = (e: GestureResponderEvent) => {
+    const { locationX, locationY } = e.nativeEvent;
+    const startAt = pressStartRef.current;
+    pressStartRef.current = null;
+    if (typeof locationX !== 'number' || typeof locationY !== 'number') return;
+    // A press that moved is a scroll or drag, not a tap.
+    if (
+      startAt &&
+      (Math.abs(locationX - startAt.x) > 8 ||
+        Math.abs(locationY - startAt.y) > 8)
+    ) {
+      return;
+    }
+    lastResponderPlaceRef.current = Date.now();
+    placeAt(locationX, locationY);
   };
 
   const runSearch = async () => {
@@ -622,7 +668,13 @@ export default function RoutePlanner({
               </View>
             );
           })()}
-        <Pressable className="absolute inset-0" onPress={handleTap} />
+        <View
+          ref={overlayRef}
+          className="absolute inset-0"
+          onStartShouldSetResponder={() => true}
+          onResponderGrant={handlePressGrant}
+          onResponderRelease={handlePressRelease}
+        />
         <View className="absolute right-2 top-2 gap-1.5">
           <Pressable
             className="h-8 w-8 items-center justify-center rounded-full bg-panel"
