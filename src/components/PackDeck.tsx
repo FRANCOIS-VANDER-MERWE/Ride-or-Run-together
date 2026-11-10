@@ -29,6 +29,7 @@ import type {
   SessionInviteRow,
   SessionParticipantRow,
   SessionVisibility,
+  RouteRow,
 } from '../services/database.types';
 import {
   createSession,
@@ -40,6 +41,7 @@ import {
   joinSession,
   respondToInvite,
   setMyParticipantStatus,
+  setSessionRoute,
   setSessionStatus,
   sendInvite,
 } from '../services/sessionsService';
@@ -55,7 +57,12 @@ import {
   searchProfilesByUsername,
 } from '../services/profilesService';
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { fetchLatestPings } from '../services/rideDataService';
+import {
+  createRoute,
+  fetchLatestPings,
+  fetchRoutes,
+} from '../services/rideDataService';
+import RoutePlanner, { type PlannedRoute } from './RoutePlanner';
 import {
   enqueueTrack,
   fetchPlaybackState,
@@ -131,6 +138,21 @@ export default function PackDeck() {
   const [newTitle, setNewTitle] = useState('');
   const [newVisibility, setNewVisibility] =
     useState<SessionVisibility>('friends');
+  const [routes, setRoutes] = useState<RouteRow[]>([]);
+  const [newRouteId, setNewRouteId] = useState<string | null>(null);
+  const [planningRoute, setPlanningRoute] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void fetchRoutes()
+      .then((rows) => {
+        if (live) setRoutes(rows);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<ProfileRow[]>([]);
 
@@ -346,10 +368,39 @@ export default function PackDeck() {
       const created = await createSession(myId, {
         title: newTitle.trim(),
         visibility: newVisibility,
+        routeId: newRouteId ?? undefined,
       });
       setActiveSession(created);
       setNewTitle('');
+      setNewRouteId(null);
     }, 'Session created. It starts in the lobby.');
+
+  const syncSessionRoute = (session: RideSessionRow, routeId: string | null) => {
+    const updated = { ...session, route_id: routeId };
+    setMySessions((prev) =>
+      prev.map((s) => (s.session_id === session.session_id ? updated : s))
+    );
+    if (activeSession?.session_id === session.session_id) {
+      setActiveSession(updated);
+    }
+  };
+
+  const handleAttachRoute = (session: RideSessionRow, routeId: string | null) =>
+    run(async () => {
+      await setSessionRoute(session.session_id, routeId);
+      syncSessionRoute(session, routeId);
+    }, routeId ? 'Route attached.' : 'Route removed.');
+
+  const handlePlanSave =
+    (session: RideSessionRow) => async (planned: PlannedRoute) => {
+      if (!myId) throw new Error('Not signed in.');
+      const route = await createRoute(myId, planned);
+      setRoutes((prev) => [route, ...prev]);
+      await setSessionRoute(session.session_id, route.route_id);
+      syncSessionRoute(session, route.route_id);
+      setPlanningRoute(false);
+      setInfo('Route saved and attached.');
+    };
 
   const handleJoin = (session: RideSessionRow) =>
     run(async () => {
@@ -459,6 +510,28 @@ export default function PackDeck() {
             </Pressable>
           ))}
         </View>
+        <Text className="text-[12px] text-muted">ROUTE (OPTIONAL)</Text>
+        <View className="flex-row flex-wrap gap-2">
+          <Pressable
+            onPress={() => setNewRouteId(null)}
+            className={`rounded-full border border-line px-3 py-1.5 ${newRouteId === null ? 'border-accent bg-accent' : ''}`}
+          >
+            <Text className={`text-[12px] font-bold text-muted ${newRouteId === null ? 'text-ink' : ''}`}>
+              No route
+            </Text>
+          </Pressable>
+          {routes.map((r) => (
+            <Pressable
+              key={r.route_id}
+              onPress={() => setNewRouteId(r.route_id)}
+              className={`rounded-full border border-line px-3 py-1.5 ${newRouteId === r.route_id ? 'border-accent bg-accent' : ''}`}
+            >
+              <Text className={`text-[12px] font-bold text-muted ${newRouteId === r.route_id ? 'text-ink' : ''}`}>
+                {r.name} · {(r.distance_m / 1609.34).toFixed(1)} mi
+              </Text>
+            </Pressable>
+          ))}
+        </View>
         <Pressable
           className={`items-center rounded-[10px] bg-accent py-[11px] ${busy ? 'opacity-60' : ''}`}
           onPress={handleCreate}
@@ -546,6 +619,77 @@ export default function PackDeck() {
                       Live location starts when the host starts the session.
                     </Text>
                   )}
+                  <View className="gap-1.5 pt-1.5">
+                    <Text className="text-[12px] text-muted">ROUTE</Text>
+                    {session.route_id ? (
+                      <Text className="text-[14px] text-fog">
+                        {routes.find((r) => r.route_id === session.route_id)?.name ??
+                          'Attached route'}{' '}
+                        {(() => {
+                          const attached = routes.find(
+                            (r) => r.route_id === session.route_id
+                          );
+                          return attached
+                            ? `· ${(attached.distance_m / 1609.34).toFixed(1)} mi${attached.is_loop ? ' · loop' : ''}`
+                            : '';
+                        })()}
+                      </Text>
+                    ) : (
+                      <Text className="text-[14px] text-muted">
+                        No route attached. Riders still see each other on the
+                        map; a route adds the planned line for everyone.
+                      </Text>
+                    )}
+                    {isHost && session.status === 'lobby' && (
+                      <View className="gap-2">
+                        <View className="flex-row flex-wrap gap-2">
+                          <Pressable
+                            className="rounded-full border border-line px-2.5 py-[5px]"
+                            onPress={() => setPlanningRoute((v) => !v)}
+                          >
+                            <Text className="text-[12px] font-bold text-accent">
+                              {planningRoute ? 'Close planner' : 'Plan new route'}
+                            </Text>
+                          </Pressable>
+                          {session.route_id ? (
+                            <Pressable
+                              className="rounded-full border border-line px-2.5 py-[5px]"
+                              onPress={() => void handleAttachRoute(session, null)}
+                            >
+                              <Text className="text-[12px] font-bold text-danger">
+                                Remove route
+                              </Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                        {routes.some((r) => r.route_id !== session.route_id) && (
+                          <View className="flex-row flex-wrap gap-2">
+                            {routes
+                              .filter((r) => r.route_id !== session.route_id)
+                              .map((r) => (
+                                <Pressable
+                                  key={r.route_id}
+                                  className="rounded-full border border-line px-2.5 py-[5px]"
+                                  onPress={() =>
+                                    void handleAttachRoute(session, r.route_id)
+                                  }
+                                >
+                                  <Text className="text-[12px] font-bold text-fog">
+                                    Attach: {r.name}
+                                  </Text>
+                                </Pressable>
+                              ))}
+                          </View>
+                        )}
+                        {planningRoute && (
+                          <RoutePlanner
+                            onSave={handlePlanSave(session)}
+                            onCancel={() => setPlanningRoute(false)}
+                          />
+                        )}
+                      </View>
+                    )}
+                  </View>
                   <View className="gap-1.5 pt-1.5">
                     <Text className="text-[12px] text-muted">
                       SHARED QUEUE · {queueLive}

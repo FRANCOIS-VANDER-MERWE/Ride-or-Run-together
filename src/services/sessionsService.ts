@@ -141,6 +141,19 @@ export async function fetchDiscoverableSessions(
   return data ?? [];
 }
 
+/** Attaches a planned route to a session, or clears it with null. */
+export async function setSessionRoute(
+  sessionId: string,
+  routeId: string | null
+): Promise<void> {
+  const db = requireSupabase();
+  const { error } = await db
+    .from('ride_sessions')
+    .update({ route_id: routeId })
+    .eq('session_id', sessionId);
+  if (error) throw new Error(`[Supabase] setSessionRoute: ${error.message}`);
+}
+
 export async function setSessionStatus(
   sessionId: string,
   status: SessionStatus
