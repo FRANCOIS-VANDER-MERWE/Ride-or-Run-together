@@ -33,6 +33,32 @@ export interface CreateRouteInput {
   isLoop?: boolean;
 }
 
+/**
+ * Spatial values go in as EWKT strings, not GeoJSON objects. A GeoJSON
+ * Point object inserts fine through the API (location_pings proves
+ * it), but a GeoJSON LineString object comes back with
+ * 'parse error - invalid geometry'. EWKT is the native input format
+ * for geography columns, and reads still come back as GeoJSON, so
+ * nothing downstream changes.
+ */
+function pointEwkt(lat: number, lng: number): string {
+  return `SRID=4326;POINT(${lng} ${lat})`;
+}
+
+function lineStringEwkt(coords: { lat: number; lng: number }[]): string {
+  const deduped = coords.filter(
+    (c, i) =>
+      i === 0 || c.lat !== coords[i - 1].lat || c.lng !== coords[i - 1].lng
+  );
+  if (deduped.length < 2) {
+    throw new Error(
+      'Those points are all in the same spot. Spread them out along the route.'
+    );
+  }
+  const body = deduped.map((c) => `${c.lng} ${c.lat}`).join(',');
+  return `SRID=4326;LINESTRING(${body})`;
+}
+
 export async function createRoute(
   userId: string,
   input: CreateRouteInput
@@ -49,9 +75,12 @@ export async function createRoute(
       created_by: userId,
       name: input.name,
       description: input.description ?? null,
-      path: lineStringGeoJson(input.coords),
-      start_point: pointGeoJson(first.lat, first.lng),
-      end_point: pointGeoJson(last.lat, last.lng),
+      path: lineStringEwkt(input.coords) as unknown as GeoJsonLineString,
+      start_point: pointEwkt(
+        first.lat,
+        first.lng
+      ) as unknown as GeoJsonPoint,
+      end_point: pointEwkt(last.lat, last.lng) as unknown as GeoJsonPoint,
       is_loop: input.isLoop ?? false,
       distance_m: Math.round(input.distanceM),
       est_duration_s: input.estDurationS ?? null,
