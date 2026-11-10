@@ -118,6 +118,8 @@ export default function ComplicationsView({
   const [center, setCenter] = useState<LatLng | null>(null);
   const [mapSize, setMapSize] = useState({ w: 0, h: 300 });
   const [gpsNote, setGpsNote] = useState<string | null>(null);
+  const [tileError, setTileError] = useState(false);
+  const tileErrorRef = useRef(false);
   const [now, setNow] = useState(Date.now());
   const [playback, setPlayback] =
     useState<SessionPlaybackStateRow | null>(null);
@@ -240,46 +242,85 @@ export default function ComplicationsView({
   useEffect(() => {
     if (!sessionId || !myId) return;
     let live = true;
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+    let poll: ReturnType<typeof setInterval> | null = null;
+    const applyFix = (loc: Location.LocationObject) => {
       if (!live) return;
-      if (status !== 'granted') {
-        setGpsNote('Location permission is off, so your stats and pack position cannot update.');
-        return;
-      }
-      watchRef.current = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.Balanced,
-          distanceInterval: 3,
-          timeInterval: 1000,
-        },
-        (loc) => {
-          const pos = {
-            lat: loc.coords.latitude,
-            lng: loc.coords.longitude,
-          };
-          setMyPos(pos);
-          setMySpeed(loc.coords.speed ?? null);
-          setCenter((c) => {
-            if (!c) return pos;
-            return haversineM(c, pos) > 60 ? pos : c;
-          });
-          const last = lastPosRef.current;
-          if (last) {
-            const seg = haversineM(last, pos);
-            if (seg >= 3 && seg <= 200) {
-              setDistanceM((d) => d + seg);
-              setTrail((t) => [...t.slice(-499), pos]);
-            }
-          } else {
-            setTrail([pos]);
-          }
-          lastPosRef.current = pos;
+      const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+      setMyPos(pos);
+      setMySpeed(loc.coords.speed ?? null);
+      setCenter((c) => {
+        if (!c) return pos;
+        return haversineM(c, pos) > 60 ? pos : c;
+      });
+      const last = lastPosRef.current;
+      if (last) {
+        const seg = haversineM(last, pos);
+        if (seg >= 3 && seg <= 200) {
+          setDistanceM((d) => d + seg);
+          setTrail((t) => [...t.slice(-499), pos]);
         }
-      );
+      } else {
+        setTrail([pos]);
+      }
+      lastPosRef.current = pos;
+    };
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (!live) return;
+        if (status !== 'granted') {
+          setGpsNote(
+            'Location permission is off, so your stats and pack position cannot update.'
+          );
+          return;
+        }
+        // One-shot first fix: the map centers immediately instead of
+        // waiting on the watcher, whose first delivery can be slow.
+        try {
+          // Raced against a timeout: on desktop browsers a one-shot fix
+          // can hang indefinitely when the OS blocks location at the
+          // system level even though the site prompt was allowed.
+          const first = await Promise.race([
+            Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            }),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+          ]);
+          if (first) applyFix(first);
+        } catch {
+          // The watcher or poll below will keep trying.
+        }
+        if (!live) return;
+        try {
+          watchRef.current = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.Balanced,
+              distanceInterval: 3,
+              timeInterval: 1000,
+            },
+            applyFix
+          );
+        } catch {
+          // Some web environments reject watchers; poll instead.
+          poll = setInterval(() => {
+            void Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            })
+              .then(applyFix)
+              .catch(() => {});
+          }, 4000);
+        }
+      } catch (err) {
+        if (live) {
+          setGpsNote(
+            err instanceof Error ? `GPS error: ${err.message}` : 'GPS unavailable on this device.'
+          );
+        }
+      }
     })();
     return () => {
       live = false;
+      if (poll) clearInterval(poll);
       watchRef.current?.remove();
       watchRef.current = null;
     };
@@ -442,10 +483,16 @@ export default function ComplicationsView({
       >
         {mapCenter ? (
           <>
-            {tiles.map((t) => (
+            {tiles.map((t, i) => (
               <Image
                 key={t.key}
                 source={{ uri: t.uri }}
+                onError={() => {
+                  if (i === 0 && !tileErrorRef.current) {
+                    tileErrorRef.current = true;
+                    setTileError(true);
+                  }
+                }}
                 style={{
                   position: 'absolute',
                   left: t.left,
@@ -560,6 +607,11 @@ export default function ComplicationsView({
       {gpsNote ? (
         <Text className="px-5 pb-1 font-mono text-[11px] leading-4 text-warn">
           {gpsNote}
+        </Text>
+      ) : null}
+      {tileError ? (
+        <Text className="px-5 pb-1 font-mono text-[11px] leading-4 text-warn">
+          Map tiles failed to load. Check the connection and reload.
         </Text>
       ) : null}
 
