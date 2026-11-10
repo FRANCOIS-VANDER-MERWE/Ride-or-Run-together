@@ -91,6 +91,32 @@ export async function createRoute(
   return data;
 }
 
+/**
+ * Spatial reads normally come back as GeoJSON, but a geography value
+ * can also arrive as a WKT string depending on the API path. Normalize
+ * both to the GeoJSON shape the app types expect, and fail loudly on
+ * anything else instead of letting a consumer die silently on a
+ * missing coordinates array.
+ */
+function normalizeLineString(value: unknown): GeoJsonLineString {
+  if (typeof value === 'string') {
+    const match = value.match(/LINESTRING\s*\(([^)]*)\)/i);
+    if (!match) {
+      throw new Error('The route path came back in an unreadable format.');
+    }
+    const coordinates = match[1].split(',').map((pair) => {
+      const [lng, lat] = pair.trim().split(/\s+/).map(Number);
+      return [lng, lat] as [number, number];
+    });
+    return { type: 'LineString', coordinates };
+  }
+  const geo = value as GeoJsonLineString;
+  if (!geo || !Array.isArray(geo.coordinates)) {
+    throw new Error('The route path came back in an unreadable format.');
+  }
+  return geo;
+}
+
 export async function fetchRoute(routeId: string): Promise<RouteRow | null> {
   const db = requireSupabase();
   const { data, error } = await db
@@ -99,7 +125,8 @@ export async function fetchRoute(routeId: string): Promise<RouteRow | null> {
     .eq('route_id', routeId)
     .maybeSingle();
   if (error) throw new Error(`[Supabase] fetchRoute: ${error.message}`);
-  return data;
+  if (!data) return null;
+  return { ...data, path: normalizeLineString(data.path) };
 }
 
 export async function fetchRoutes(limit = 50): Promise<RouteRow[]> {

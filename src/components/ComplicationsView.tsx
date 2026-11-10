@@ -115,6 +115,8 @@ export default function ComplicationsView({
   const [trail, setTrail] = useState<LatLng[]>([]);
   const [distanceM, setDistanceM] = useState(0);
   const [routeLine, setRouteLine] = useState<LatLng[]>([]);
+  const [routeName, setRouteName] = useState<string | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
   const [center, setCenter] = useState<LatLng | null>(null);
   const [mapSize, setMapSize] = useState({ w: 0, h: 300 });
   const [gpsNote, setGpsNote] = useState<string | null>(null);
@@ -160,17 +162,40 @@ export default function ComplicationsView({
   useEffect(() => {
     if (!activeSession?.route_id) {
       setRouteLine([]);
+      setRouteName(null);
+      setRouteError(null);
       return;
     }
     let live = true;
     void fetchRoute(activeSession.route_id)
       .then((route) => {
-        if (!live || !route) return;
-        setRouteLine(
-          route.path.coordinates.map(([lng, lat]) => ({ lat, lng }))
+        if (!live) return;
+        if (!route) {
+          setRouteError('The attached route could not be found.');
+          return;
+        }
+        const line = route.path.coordinates.map(([lng, lat]) => ({
+          lat,
+          lng,
+        }));
+        setRouteLine(line);
+        setRouteName(
+          `${route.name} · ${(route.distance_m / 1609.34).toFixed(1)} mi`
         );
+        setRouteError(null);
+        // With no GPS fix yet, frame the route start so the line is on
+        // screen instead of waiting off-map somewhere across town.
+        if (!lastPosRef.current && line.length > 0) {
+          setCenter(line[0]);
+        }
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        if (live) {
+          setRouteError(
+            err instanceof Error ? err.message : 'Route failed to load.'
+          );
+        }
+      });
     return () => {
       live = false;
     };
@@ -454,6 +479,19 @@ export default function ComplicationsView({
         </Text>
       </View>
 
+      {activeSession.route_id ? (
+        <Text
+          className={`px-5 pb-1 font-mono text-[11px] ${routeError ? 'text-warn' : 'text-muted'}`}
+          numberOfLines={1}
+        >
+          {routeError
+            ? `Route problem: ${routeError}`
+            : routeName
+              ? `Route: ${routeName}`
+              : 'Loading route...'}
+        </Text>
+      ) : null}
+
       <View className="flex-row items-end justify-between px-5 pb-2">
         <View>
           <Text className="text-[64px] font-extrabold leading-[64px] text-fog">
@@ -562,6 +600,14 @@ export default function ComplicationsView({
                   </View>
                 );
               })()}
+            {routeLine.length > 0 && (
+              <Pressable
+                className="absolute bottom-2 left-2 rounded-full bg-panel px-2.5 py-1.5"
+                onPress={() => setCenter(routeLine[0])}
+              >
+                <Text className="text-[11px] font-bold text-fog">Go to route</Text>
+              </Pressable>
+            )}
             <Text className="absolute bottom-1 right-2 font-mono text-[9px] text-black/60">
               © OpenStreetMap
             </Text>
