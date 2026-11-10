@@ -92,29 +92,80 @@ export async function createRoute(
 }
 
 /**
- * Spatial reads normally come back as GeoJSON, but a geography value
- * can also arrive as a WKT string depending on the API path. Normalize
- * both to the GeoJSON shape the app types expect, and fail loudly on
- * anything else instead of letting a consumer die silently on a
- * missing coordinates array.
+ * Spatial reads can arrive in several wire formats depending on the
+ * API path: a GeoJSON object, a GeoJSON string, WKT or EWKT text, or
+ * hex-encoded WKB (the geography type's raw form, which is what this
+ * project actually sends back). Decode all of them into the GeoJSON
+ * shapes the app types expect. Failures name the format sample so a
+ * bad shape is diagnosable from the error alone.
  */
-function normalizeLineString(value: unknown): GeoJsonLineString {
+function wkbCoords(hex: string, wantType: 1 | 2): [number, number][] {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  const view = new DataView(bytes.buffer);
+  const little = view.getUint8(0) === 1;
+  let offset = 1;
+  const rawType = view.getUint32(offset, little);
+  offset += 4;
+  const baseType = rawType & 0xff;
+  if (baseType !== wantType) {
+    throw new Error(`WKB type ${baseType}, expected ${wantType}.`);
+  }
+  if (rawType & 0x20000000) offset += 4; // SRID flag
+  const readPoint = (): [number, number] => {
+    const lng = view.getFloat64(offset, little);
+    const lat = view.getFloat64(offset + 8, little);
+    offset += 16;
+    return [lng, lat];
+  };
+  if (wantType === 1) return [readPoint()];
+  const count = view.getUint32(offset, little);
+  offset += 4;
+  const coords: [number, number][] = [];
+  for (let i = 0; i < count; i++) coords.push(readPoint());
+  return coords;
+}
+
+function decodeSpatial(value: unknown, wantType: 1 | 2): [number, number][] {
   if (typeof value === 'string') {
-    const match = value.match(/LINESTRING\s*\(([^)]*)\)/i);
-    if (!match) {
-      throw new Error('The route path came back in an unreadable format.');
+    const text = value.trim();
+    if (text.startsWith('{')) {
+      return decodeSpatial(JSON.parse(text) as unknown, wantType);
     }
-    const coordinates = match[1].split(',').map((pair) => {
-      const [lng, lat] = pair.trim().split(/\s+/).map(Number);
-      return [lng, lat] as [number, number];
-    });
-    return { type: 'LineString', coordinates };
+    const wkt = text.match(/(POINT|LINESTRING)\s*\(([^)]*)\)/i);
+    if (wkt) {
+      return wkt[2].split(',').map((pair) => {
+        const [lng, lat] = pair.trim().split(/\s+/).map(Number);
+        return [lng, lat] as [number, number];
+      });
+    }
+    if (/^[0-9a-fA-F]+$/.test(text) && text.length % 2 === 0) {
+      return wkbCoords(text, wantType);
+    }
+    throw new Error(
+      `Unreadable spatial value (starts with "${text.slice(0, 24)}").`
+    );
   }
-  const geo = value as GeoJsonLineString;
-  if (!geo || !Array.isArray(geo.coordinates)) {
-    throw new Error('The route path came back in an unreadable format.');
+  const geo = value as { coordinates?: unknown };
+  if (geo && Array.isArray(geo.coordinates)) {
+    if (wantType === 1) {
+      return [geo.coordinates as [number, number]];
+    }
+    return geo.coordinates as [number, number][];
   }
-  return geo;
+  throw new Error(
+    `Unreadable spatial value (starts with "${JSON.stringify(value)?.slice(0, 24) ?? 'null'}").`
+  );
+}
+
+function normalizeLineString(value: unknown): GeoJsonLineString {
+  return { type: 'LineString', coordinates: decodeSpatial(value, 2) };
+}
+
+function normalizePoint(value: unknown): GeoJsonPoint {
+  return { type: 'Point', coordinates: decodeSpatial(value, 1)[0] };
 }
 
 export async function fetchRoute(routeId: string): Promise<RouteRow | null> {
@@ -210,7 +261,15 @@ export async function fetchLatestPings(
   if (error) throw new Error(`[Supabase] fetchLatestPings: ${error.message}`);
   const latest = new Map<string, LocationPingRow>();
   for (const row of data ?? []) {
-    if (!latest.has(row.user_id)) latest.set(row.user_id, row);
+    if (latest.has(row.user_id)) continue;
+    try {
+      latest.set(row.user_id, {
+        ...row,
+        location: normalizePoint(row.location),
+      });
+    } catch {
+      // Skip a ping whose location cannot be decoded.
+    }
   }
   return latest;
 }
