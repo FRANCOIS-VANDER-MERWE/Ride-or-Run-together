@@ -142,6 +142,8 @@ export default function PackDeck() {
   const [newRouteId, setNewRouteId] = useState<string | null>(null);
   const [planningRoute, setPlanningRoute] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [createPlanning, setCreatePlanning] = useState(false);
+  const [pendingRoute, setPendingRoute] = useState<PlannedRoute | null>(null);
   const [showManualAdd, setShowManualAdd] = useState(false);
 
   useEffect(() => {
@@ -372,9 +374,18 @@ export default function PackDeck() {
         visibility: newVisibility,
         routeId: newRouteId ?? undefined,
       });
-      setActiveSession(created);
+      let finalSession = created;
+      if (pendingRoute) {
+        const route = await createRoute(myId, pendingRoute);
+        await setSessionRoute(created.session_id, route.route_id);
+        setRoutes((prev) => [route, ...prev]);
+        finalSession = { ...created, route_id: route.route_id };
+      }
+      setActiveSession(finalSession);
       setNewTitle('');
       setNewRouteId(null);
+      setPendingRoute(null);
+      setCreatePlanning(false);
     }, 'Session created. It starts in the lobby.');
 
   const syncSessionRoute = (session: RideSessionRow, routeId: string | null) => {
@@ -660,7 +671,18 @@ export default function PackDeck() {
               draws the planned line on everyone's Ride screen.
             </Text>
           )}
-          {isHost && session.status === 'lobby' && (
+          {!isHost && (
+            <Text className="text-[12px] text-muted">
+              Only the host can plan or change the route.
+            </Text>
+          )}
+          {(session.status === 'completed' || session.status === 'cancelled') && (
+            <Text className="text-[12px] text-muted">
+              This session has ended, so its route can no longer change.
+            </Text>
+          )}
+          {isHost &&
+            (session.status === 'lobby' || session.status === 'active') && (
             <View className="gap-2 pt-1">
               <Pressable
                 className="items-center rounded-[10px] bg-accent py-[11px]"
@@ -1062,7 +1084,10 @@ export default function PackDeck() {
           <Text className="text-[12px] text-muted">ROUTE (OPTIONAL)</Text>
           <View className="flex-row flex-wrap gap-2">
             <Pressable
-              onPress={() => setNewRouteId(null)}
+              onPress={() => {
+                setNewRouteId(null);
+                setPendingRoute(null);
+              }}
               className={`rounded-full border border-line px-3 py-1.5 ${newRouteId === null ? 'border-accent bg-accent' : ''}`}
             >
               <Text className={`text-[12px] font-bold text-muted ${newRouteId === null ? 'text-ink' : ''}`}>
@@ -1072,7 +1097,10 @@ export default function PackDeck() {
             {routes.map((r) => (
               <Pressable
                 key={r.route_id}
-                onPress={() => setNewRouteId(r.route_id)}
+                onPress={() => {
+                  setNewRouteId(r.route_id);
+                  setPendingRoute(null);
+                }}
                 className={`rounded-full border border-line px-3 py-1.5 ${newRouteId === r.route_id ? 'border-accent bg-accent' : ''}`}
               >
                 <Text className={`text-[12px] font-bold text-muted ${newRouteId === r.route_id ? 'text-ink' : ''}`}>
@@ -1081,10 +1109,53 @@ export default function PackDeck() {
               </Pressable>
             ))}
           </View>
-          <Text className="text-[12px] leading-4 text-muted">
-            No fitting route yet? Create the session first, open it, and plan
-            the route on a map from there.
-          </Text>
+          {pendingRoute ? (
+            <View className="gap-1.5 rounded-[10px] border border-accent p-2.5">
+              <Text className="text-[13px] font-semibold text-fog">
+                New route: {pendingRoute.name} ·{' '}
+                {(pendingRoute.distanceM / 1609.34).toFixed(1)} mi
+                {pendingRoute.estDurationS
+                  ? ` · about ${Math.round(pendingRoute.estDurationS / 60)} min`
+                  : ''}
+              </Text>
+              <Text className="text-[12px] text-muted">
+                It attaches automatically when you create the session.
+              </Text>
+              <View className="flex-row gap-2">
+                <Pressable
+                  className="rounded-full border border-line px-2.5 py-[5px]"
+                  onPress={() => setCreatePlanning(true)}
+                >
+                  <Text className="text-[12px] font-bold text-accent">Edit</Text>
+                </Pressable>
+                <Pressable
+                  className="rounded-full border border-line px-2.5 py-[5px]"
+                  onPress={() => setPendingRoute(null)}
+                >
+                  <Text className="text-[12px] font-bold text-danger">Remove</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <Pressable
+              className="items-center rounded-[10px] border border-accent py-[10px]"
+              onPress={() => setCreatePlanning((v) => !v)}
+            >
+              <Text className="text-[13px] font-extrabold text-accent">
+                {createPlanning ? 'Close the planner' : 'Plan a new route'}
+              </Text>
+            </Pressable>
+          )}
+          {createPlanning && (
+            <RoutePlanner
+              onSave={async (planned) => {
+                setPendingRoute(planned);
+                setNewRouteId(null);
+                setCreatePlanning(false);
+              }}
+              onCancel={() => setCreatePlanning(false)}
+            />
+          )}
           <Pressable
             className={`items-center rounded-[10px] bg-accent py-[11px] ${busy ? 'opacity-60' : ''}`}
             onPress={handleCreate}
