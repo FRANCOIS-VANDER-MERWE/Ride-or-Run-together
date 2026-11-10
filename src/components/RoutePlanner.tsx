@@ -124,10 +124,12 @@ export default function RoutePlanner({
   const sizeRef = useRef(size);
   sizeRef.current = size;
 
-  const chain = useMemo(
-    () => (start && end ? [start, ...waypoints, end] : []),
-    [start, end, waypoints]
-  );
+  const chain = useMemo(() => {
+    if (!start) return [];
+    return end ? [start, ...waypoints, end] : [start, ...waypoints];
+  }, [start, end, waypoints]);
+  const effectiveEnd: Pt | null =
+    end ?? waypoints[waypoints.length - 1] ?? null;
 
   const fitTo = (coords: Pt[]) => {
     const { w, h } = sizeRef.current;
@@ -174,7 +176,7 @@ export default function RoutePlanner({
 
   // Road routing, debounced, whenever the point chain changes.
   useEffect(() => {
-    if (!start || !end) {
+    if (chain.length < 2) {
       setAlternatives([]);
       setRouteNote(null);
       return;
@@ -385,18 +387,20 @@ export default function RoutePlanner({
     ? chosen.durationS
     : straightDistanceM / AVG_PACE_MPS;
   const isLoop =
-    start !== null && end !== null && haversineM(start, end) <= 25;
+    start !== null &&
+    effectiveEnd !== null &&
+    haversineM(start, effectiveEnd) <= 25;
 
   const handleSave = async () => {
-    if (!start || !end || saving) return;
+    if (!start || chain.length < 2 || saving) return;
     setSaving(true);
     setError(null);
     try {
       await onSave({
         name:
           name.trim() ||
-          (start.label && end.label
-            ? `${start.label} to ${end.label}`
+          (start.label && effectiveEnd?.label
+            ? `${start.label} to ${effectiveEnd.label}`
             : 'Untitled route'),
         coords: chosen ? chosen.coords : chain,
         distanceM: displayDistanceM,
@@ -519,7 +523,7 @@ export default function RoutePlanner({
           >
             <Text className="text-[12px] font-bold text-fog">Use my location</Text>
           </Pressable>
-          {start && end && (
+          {chain.length >= 2 && (
             <Pressable
               className="rounded-full border border-line px-2.5 py-[5px]"
               onPress={() => {
@@ -646,13 +650,22 @@ export default function RoutePlanner({
           })()}
         {waypoints.map((wp, i) => {
           const s = project(wp);
+          const isDest = !end && i === waypoints.length - 1;
           return (
             <View
               key={`wp-${i}`}
-              className="absolute h-5 w-5 items-center justify-center rounded-full border border-white bg-[#8A93A6]"
-              style={{ left: s.x - 10, top: s.y - 10 }}
+              className="absolute h-5 w-5 items-center justify-center rounded-full border border-white"
+              style={{
+                left: s.x - 10,
+                top: s.y - 10,
+                backgroundColor: isDest ? '#F87171' : '#8A93A6',
+                width: isDest ? 24 : 20,
+                height: isDest ? 24 : 20,
+              }}
             >
-              <Text className="text-[9px] font-bold text-white">{i + 1}</Text>
+              <Text className="text-[9px] font-bold text-white">
+                {isDest ? 'B' : i + 1}
+              </Text>
             </View>
           );
         })}
@@ -765,9 +778,9 @@ export default function RoutePlanner({
       ) : null}
       <View className="flex-row gap-2">
         <Pressable
-          className={`flex-1 items-center rounded-[10px] bg-accent py-[10px] ${!start || !end || saving ? 'opacity-50' : ''}`}
+          className={`flex-1 items-center rounded-[10px] bg-accent py-[10px] ${chain.length < 2 || saving ? 'opacity-50' : ''}`}
           onPress={() => void handleSave()}
-          disabled={!start || !end || saving}
+          disabled={chain.length < 2 || saving}
         >
           <Text className="text-[13px] font-extrabold text-ink">
             {saving ? 'Saving...' : 'Save and attach route'}
@@ -781,6 +794,18 @@ export default function RoutePlanner({
           <Text className="text-[13px] font-bold text-fog">Cancel</Text>
         </Pressable>
       </View>
+      {chain.length < 2 ? (
+        <Text className="font-mono text-[11px] leading-4 text-warn">
+          Two points minimum to save. Tap the map once for the start (A),
+          then again for the destination (B). Search and Use my location
+          work too.
+        </Text>
+      ) : !end ? (
+        <Text className="text-[12px] text-muted">
+          No separate destination set: your last point counts as B, and it
+          is marked red on the map.
+        </Text>
+      ) : null}
     </View>
   );
 }
