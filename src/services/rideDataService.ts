@@ -62,6 +62,17 @@ export async function createRoute(
   return data;
 }
 
+export async function fetchRoute(routeId: string): Promise<RouteRow | null> {
+  const db = requireSupabase();
+  const { data, error } = await db
+    .from('routes')
+    .select('*')
+    .eq('route_id', routeId)
+    .maybeSingle();
+  if (error) throw new Error(`[Supabase] fetchRoute: ${error.message}`);
+  return data;
+}
+
 export async function fetchRoutes(limit = 50): Promise<RouteRow[]> {
   const db = requireSupabase();
   const { data, error } = await db

@@ -15,7 +15,7 @@ import AuthGate from './auth/AuthGate';
 import AccountButton from './auth/AccountButton';
 import { ActiveSessionProvider } from './session/ActiveSessionContext';
 import PackDeck from './components/PackDeck';
-import RideDeck, { type ShellTab } from './components/RideDeck';
+import ComplicationsView, { type ShellTab } from './components/ComplicationsView';
 import MusicSyncDeck from './components/MusicSyncDeck';
 
 const TABS: { id: ShellTab; label: string; Icon: typeof Flag }[] = [
@@ -36,7 +36,7 @@ function Shell() {
         <AccountButton />
       </View>
       <View className="flex-1">
-        {activeTab === 'ride' && <RideDeck onNavigate={setActiveTab} />}
+        {activeTab === 'ride' && <ComplicationsView onNavigate={setActiveTab} />}
         {activeTab === 'pack' && <PackDeck />}
         {activeTab === 'music' && <MusicSyncDeck />}
       </View>
