@@ -414,6 +414,7 @@ export default function RoutePlanner({
   };
 
   const renderRow = (opts: {
+    rowKey?: string;
     color: string;
     letter: string;
     title: string;
@@ -423,6 +424,7 @@ export default function RoutePlanner({
     onClear?: () => void;
   }) => (
     <Pressable
+      key={opts.rowKey}
       className={`flex-row items-center gap-2.5 rounded-[10px] border px-2.5 py-2 ${opts.isActive ? 'border-accent bg-panel' : 'border-line'}`}
       onPress={opts.onPress}
     >
@@ -483,6 +485,7 @@ export default function RoutePlanner({
         })}
         {waypoints.map((wp, i) =>
           renderRow({
+            rowKey: `wprow-${i}`,
             color: '#8A93A6',
             letter: `${i + 1}`,
             title: `Waypoint ${i + 1}`,
