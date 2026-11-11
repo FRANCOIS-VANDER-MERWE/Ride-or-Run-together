@@ -26,6 +26,18 @@ const TABS: { id: ShellTab; label: string; Icon: typeof Flag }[] = [
 
 function Shell() {
   const [activeTab, setActiveTab] = useState<ShellTab>('ride');
+  // Tabs mount on first visit and then STAY mounted, hidden with
+  // display:none. Unmounting on switch wiped every screen's state:
+  // the open pack session, music search results, and mid-ride stats.
+  const [visited, setVisited] = useState<ReadonlySet<ShellTab>>(
+    () => new Set<ShellTab>(['ride'])
+  );
+  const showTab = (tab: ShellTab) => {
+    setVisited((prev) =>
+      prev.has(tab) ? prev : new Set(prev).add(tab)
+    );
+    setActiveTab(tab);
+  };
   return (
     <SafeAreaView className="flex-1 bg-ink">
       <StatusBar style="light" />
@@ -36,9 +48,21 @@ function Shell() {
         <AccountButton />
       </View>
       <View className="flex-1">
-        {activeTab === 'ride' && <ComplicationsView onNavigate={setActiveTab} />}
-        {activeTab === 'pack' && <PackDeck />}
-        {activeTab === 'music' && <MusicSyncDeck />}
+        {visited.has('ride') && (
+          <View className={activeTab === 'ride' ? 'flex-1' : 'hidden'}>
+            <ComplicationsView onNavigate={showTab} />
+          </View>
+        )}
+        {visited.has('pack') && (
+          <View className={activeTab === 'pack' ? 'flex-1' : 'hidden'}>
+            <PackDeck />
+          </View>
+        )}
+        {visited.has('music') && (
+          <View className={activeTab === 'music' ? 'flex-1' : 'hidden'}>
+            <MusicSyncDeck />
+          </View>
+        )}
       </View>
       <View className="flex-row border-t border-line bg-panel">
         {TABS.map(({ id, label, Icon }) => {
@@ -47,7 +71,7 @@ function Shell() {
             <Pressable
               key={id}
               className="flex-1 items-center py-3"
-              onPress={() => setActiveTab(id)}
+              onPress={() => showTab(id)}
             >
               <Icon size={20} color={active ? '#34D399' : '#8A93A6'} />
               <Text
