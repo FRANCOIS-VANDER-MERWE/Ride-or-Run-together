@@ -17,7 +17,8 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, Text, View } from 'react-native';
-import Svg, { Polyline } from 'react-native-svg';
+import RideMap from './RideMap';
+import type { LatLng } from './rideMapGeometry';
 import * as Location from 'expo-location';
 import { Music2, Pause, Play } from 'lucide-react-native';
 import { runSessionAudio } from '../music/sessionAudio';
@@ -46,31 +47,8 @@ import { appleMusicProvider } from '../music/providers/AppleMusicProvider';
 import type { SessionPlaybackStateRow } from '../services/database.types';
 export type ShellTab = 'ride' | 'pack' | 'music';
 
-const ZOOM = 16;
-const TILE = 256;
 const MPS_TO_MPH = 2.23694;
 
-interface LatLng {
-  lat: number;
-  lng: number;
-}
-
-function worldSize(z: number): number {
-  return TILE * 2 ** z;
-}
-function lngToX(lng: number, z: number): number {
-  return ((lng + 180) / 360) * worldSize(z);
-}
-function latToY(lat: number, z: number): number {
-  const s = Math.sin((lat * Math.PI) / 180);
-  return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * worldSize(z);
-}
-function project(p: LatLng, center: LatLng, w: number, h: number) {
-  return {
-    x: lngToX(p.lng, ZOOM) - lngToX(center.lng, ZOOM) + w / 2,
-    y: latToY(p.lat, ZOOM) - latToY(center.lat, ZOOM) + h / 2,
-  };
-}
 function haversineM(a: LatLng, b: LatLng): number {
   const R = 6371000;
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;
@@ -94,10 +72,6 @@ function formatElapsed(ms: number): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return hh > 0 ? `${p(hh)}:${p(mm)}:${p(ss)}` : `${p(mm)}:${p(ss)}`;
 }
-function initials(name: string): string {
-  return name.replace('@', '').slice(0, 2).toUpperCase() || '?';
-}
-
 export default function ComplicationsView({
   onNavigate,
 }: {
@@ -127,10 +101,8 @@ export default function ComplicationsView({
   const [routeName, setRouteName] = useState<string | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [center, setCenter] = useState<LatLng | null>(null);
-  const [mapSize, setMapSize] = useState({ w: 0, h: 300 });
   const [gpsNote, setGpsNote] = useState<string | null>(null);
   const [tileError, setTileError] = useState(false);
-  const tileErrorRef = useRef(false);
   const [now, setNow] = useState(Date.now());
   const [playback, setPlayback] =
     useState<SessionPlaybackStateRow | null>(null);
@@ -142,7 +114,7 @@ export default function ComplicationsView({
     activity.live = true;
     setNames({}); setFixes({}); setMyPos(null); setMySpeed(null); setTrail([]);
     setDistanceM(0); setRouteLine([]); setRouteName(null); setRouteError(null);
-    setCenter(null); setGpsNote(null); setTileError(false); tileErrorRef.current = false;
+    setCenter(null); setGpsNote(null); setTileError(false);
     setPlayback(null); setNowPlaying(null); lastPosRef.current = null;
     intervalStartedRef.current = Date.now(); setNow(Date.now());
     return () => { activity.live = false; ++playbackRequestRef.current; };
@@ -410,41 +382,6 @@ export default function ComplicationsView({
   const mapCenter: LatLng | null =
     center ?? myPos ?? riders[0]?.fix ?? routeLine[0] ?? null;
 
-  const tiles = useMemo(() => {
-    if (!mapCenter || mapSize.w === 0) return [];
-    const cx = lngToX(mapCenter.lng, ZOOM);
-    const cy = latToY(mapCenter.lat, ZOOM);
-    const x0 = Math.floor((cx - mapSize.w / 2) / TILE);
-    const x1 = Math.floor((cx + mapSize.w / 2) / TILE);
-    const y0 = Math.floor((cy - mapSize.h / 2) / TILE);
-    const y1 = Math.floor((cy + mapSize.h / 2) / TILE);
-    const max = 2 ** ZOOM;
-    const out: { key: string; uri: string; left: number; top: number }[] = [];
-    for (let x = x0; x <= x1; x++) {
-      for (let y = y0; y <= y1; y++) {
-        if (y < 0 || y >= max) continue;
-        const tx = ((x % max) + max) % max;
-        out.push({
-          key: `${ZOOM}/${tx}/${y}`,
-          uri: `https://tile.openstreetmap.org/${ZOOM}/${tx}/${y}.png`,
-          left: x * TILE - (cx - mapSize.w / 2),
-          top: y * TILE - (cy - mapSize.h / 2),
-        });
-      }
-    }
-    return out;
-  }, [mapCenter, mapSize]);
-
-  const toPoints = (line: LatLng[]): string => {
-    if (!mapCenter || mapSize.w === 0) return '';
-    return line
-      .map((p) => {
-        const s = project(p, mapCenter, mapSize.w, mapSize.h);
-        return `${s.x},${s.y}`;
-      })
-      .join(' ');
-  };
-
   const handleToggleMusic = async () => {
     if (!sessionId) return;
     const next = !(playback?.is_playing ?? false);
@@ -528,116 +465,17 @@ export default function ComplicationsView({
         </View>
       </View>
 
-      <View
-        className="mx-4 overflow-hidden rounded-2xl border border-line bg-panel"
-        style={{ height: 300 }}
-        onLayout={(e) =>
-          setMapSize({ w: e.nativeEvent.layout.width, h: 300 })
-        }
-      >
-        {mapCenter ? (
-          <>
-            {tiles.map((t, i) => (
-              <Image
-                key={t.key}
-                source={{ uri: t.uri }}
-                onError={() => {
-                  if (i === 0 && !tileErrorRef.current) {
-                    tileErrorRef.current = true;
-                    setTileError(true);
-                  }
-                }}
-                style={{
-                  position: 'absolute',
-                  left: t.left,
-                  top: t.top,
-                  width: TILE,
-                  height: TILE,
-                }}
-              />
-            ))}
-            <Svg
-              width={mapSize.w}
-              height={mapSize.h}
-              style={{ position: 'absolute', left: 0, top: 0 }}
-            >
-              {routeLine.length > 1 && (
-                <Polyline
-                  points={toPoints(routeLine)}
-                  fill="none"
-                  stroke="#34D399"
-                  strokeWidth={4}
-                  strokeLinejoin="round"
-                  strokeLinecap="round"
-                />
-              )}
-              {trail.length > 1 && (
-                <Polyline
-                  points={toPoints(trail)}
-                  fill="none"
-                  stroke="#D4FF00"
-                  strokeWidth={3}
-                  strokeLinejoin="round"
-                  strokeLinecap="round"
-                  opacity={0.85}
-                />
-              )}
-            </Svg>
-            {riders.map((r) => {
-              const s = project(
-                { lat: r.fix.lat, lng: r.fix.lng },
-                mapCenter,
-                mapSize.w,
-                mapSize.h
-              );
-              if (s.x < -20 || s.y < -20 || s.x > mapSize.w + 20 || s.y > mapSize.h + 20)
-                return null;
-              return (
-                <View
-                  key={r.userId}
-                  className="absolute h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-accent"
-                  style={{ left: s.x - 14, top: s.y - 14 }}
-                >
-                  <Text className="text-[10px] font-bold text-ink">
-                    {initials(r.name)}
-                  </Text>
-                </View>
-              );
-            })}
-            {myPos &&
-              (() => {
-                const s = project(myPos, mapCenter, mapSize.w, mapSize.h);
-                return (
-                  <View
-                    className="absolute h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#D4FF00]"
-                    style={{ left: s.x - 14, top: s.y - 14 }}
-                  >
-                    <Text className="text-[10px] font-bold text-ink">YOU</Text>
-                  </View>
-                );
-              })()}
-            {routeLine.length > 0 && (
-              <Pressable
-                className="absolute bottom-2 left-2 rounded-full bg-panel px-2.5 py-1.5"
-                onPress={() => setCenter(routeLine[0])}
-              >
-                <Text className="text-[11px] font-bold text-fog">Go to route</Text>
-              </Pressable>
-            )}
-            <Text className="absolute bottom-1 right-2 font-mono text-[9px] text-black/60">
-              © OpenStreetMap
-            </Text>
-          </>
-        ) : (
-          <View className="flex-1 items-center justify-center px-6">
-            <Text className="text-center text-[13px] leading-5 text-muted">
-              {isActive
-                ? 'Waiting for GPS fixes. The map fills in as riders share their location.'
-                : 'The map goes live when the host starts the session.'}
-            </Text>
-          </View>
-        )}
-      </View>
+      <RideMap
+        key={activityKey}
+        followCenter={mapCenter}
+        myPos={myPos}
+        riders={riders}
+        routeLine={routeLine}
+        trail={trail}
+        isActive={isActive}
+        onRecenter={() => { if (myPos) setCenter(myPos); }}
+        onTileError={() => setTileError(true)}
+      />
 
       <ScrollView
         horizontal

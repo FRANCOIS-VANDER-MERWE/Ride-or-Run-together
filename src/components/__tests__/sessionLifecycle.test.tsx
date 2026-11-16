@@ -7,7 +7,12 @@ vi.mock('../../auth/AuthProvider', () => ({ useAuth: () => ({ user: { id: m.user
 vi.mock('../../session/ActiveSessionContext', () => ({ useActiveSession: () => ({ activeSession: m.session, refreshActiveSession: async () => {}, participationKey: m.session ? m.key : null }) }));
 vi.mock('../../services/sessionsService', () => ({ fetchParticipants: async () => [] }));
 vi.mock('../../services/profilesService', () => ({ fetchProfile: async () => null }));
-vi.mock('../../services/rideDataService', () => ({ fetchLatestPings: () => m.latest(), fetchRoute: async () => null }));
+const mapMocks = vi.hoisted(() => ({ route: vi.fn() }));
+vi.mock('../../services/rideDataService', () => ({ fetchLatestPings: () => m.latest(), fetchRoute: (...args: unknown[]) => mapMocks.route(...args) }));
+vi.mock('../RideMap', async () => {
+  const { default: React } = await import('react');
+  return { default: (props: any) => React.createElement('RideMap', { ...props, cameraInstance: React.useRef({}).current }) };
+});
 vi.mock('../../services/musicDataService', () => ({ fetchSessionQueueWithTracks: (...x: unknown[]) => m.queue(...x), fetchPlaybackState: (...x: unknown[]) => m.state(...x), publishNowPlaying: vi.fn(), updatePlaybackState: vi.fn() }));
 vi.mock('../../services/liveLocationService', () => ({ startLocationSharing: (...x: unknown[]) => m.share(...x), subscribeToLocationFixes: () => () => {} }));
 vi.mock('../../services/supabaseClient', () => ({ subscribeToTableChanges: (_table: unknown, options: any) => { m.change = options.onChange; return null; }, supabase: null }));
@@ -25,6 +30,7 @@ beforeEach(() => {
   vi.clearAllMocks(); m.session = { ...ride('A'), status: 'active' }; m.key = 'user:A:1'; m.user = 'user';
   m.permission.mockResolvedValue({ status: 'denied' }); m.queue.mockResolvedValue([]); m.state.mockResolvedValue(null); m.latest.mockResolvedValue(new Map());
   m.share.mockResolvedValue(null); m.watch.mockResolvedValue({ remove() {} });
+  mapMocks.route.mockResolvedValue(null);
   m.provider.getAuthState.mockResolvedValue({ isConnected: true, isPremiumOrSubscribed: null, userDisplayName: null, expiresAtMs: null }); m.provider.getSnapshot.mockResolvedValue(null);
   m.provider.onTrackEnded.mockReturnValue(() => {}); m.provider.playTrack.mockResolvedValue(undefined); m.provider.pause.mockResolvedValue(undefined);
 });
@@ -96,4 +102,38 @@ test('same-session renders preserve progress; a new participation interval start
   await act(async () => root.update(<ComplicationsView onNavigate={() => {}} />));
   expect(text(root.root)).toContain('0.00 MI');
   expect(m.watch).toHaveBeenCalledTimes(2);
+});
+
+test('supplies map data without moving subscriptions and keeps warning below rider strip', async () => {
+  let applyFix!: (fix: any) => void;
+  m.session.route_id = 'route';
+  mapMocks.route.mockResolvedValue({ name: 'Route', distance_m: 1000, path: { coordinates: [[0, 0], [0.001, 0.001]] } });
+  m.latest.mockResolvedValue(new Map([['other', { location: { coordinates: [0.002, 0.002] }, speed_mps: 3, heading_deg: 0, recorded_at: 'now' }]]));
+  m.permission.mockResolvedValue({ status: 'granted' });
+  m.watch.mockImplementation(async (_options, cb) => { applyFix = cb; return { remove() {} }; });
+  await act(async () => { root = create(<ComplicationsView onNavigate={() => {}} />); });
+  await act(async () => applyFix({ coords: { latitude: 0, longitude: 0, speed: 4 } }));
+  const map = () => root.root.findByType('RideMap' as any).props;
+  expect(map().myPos).toEqual({ lat: 0, lng: 0 });
+  expect(map().followCenter).toEqual({ lat: 0, lng: 0 });
+  expect(map().routeLine).toEqual([{ lat: 0, lng: 0 }, { lat: 0.001, lng: 0.001 }]);
+  expect(map().trail).toEqual([{ lat: 0, lng: 0 }]);
+  expect(map().riders[0]).toMatchObject({ userId: 'other', fix: { lat: 0.002, lng: 0.002 } });
+  await act(async () => map().onTileError());
+  const rendered = text(root.root);
+  expect(rendered.indexOf('Map tiles failed to load.')).toBeGreaterThan(rendered.indexOf('other ·'));
+  await act(async () => root.update(<ComplicationsView onNavigate={() => {}} />));
+  expect(m.watch).toHaveBeenCalledOnce();
+  expect(m.share).toHaveBeenCalledOnce();
+});
+
+test('keys map by participation', async () => {
+  await act(async () => { root = create(<ComplicationsView onNavigate={() => {}} />); });
+  const instance = () => root.root.findByType('RideMap' as any).props.cameraInstance;
+  const first = instance();
+  await act(async () => root.update(<ComplicationsView onNavigate={() => {}} />));
+  expect(instance()).toBe(first);
+  m.key = 'user:A:2';
+  await act(async () => root.update(<ComplicationsView onNavigate={() => {}} />));
+  expect(instance()).not.toBe(first);
 });
