@@ -247,16 +247,33 @@ export default function ComplicationsView({
   }, [sessionId, refreshPlayback]);
 
   // --- pack fixes: catch-up pings, then the live broadcast ---
+  // The ping catch-up re-runs on an interval, not just once at open:
+  // a rider who starts sharing after this screen opened (the normal
+  // case for someone who joins the session late) has no stored ping
+  // at first load, and if their broadcasts miss for any reason they
+  // would otherwise never appear on the map at all. Merges are
+  // freshness-checked, so a stale ping can never overwrite a newer
+  // live fix.
   useEffect(() => {
     if (!sessionId) return;
     let live = true;
-    void fetchLatestPings(sessionId)
-      .then((latest) => {
-        if (!live || !activity.live || activityRef.current !== activityKey) return;
+    const current = () =>
+      live && activity.live && activityRef.current === activityKey;
+    const seed = async () => {
+      try {
+        const latest = await fetchLatestPings(sessionId);
+        if (!current()) return;
         setFixes((prev) => {
           const next = { ...prev };
           for (const [userId, ping] of latest) {
             if (userId === myId) continue;
+            const existing = next[userId];
+            if (
+              existing &&
+              Date.parse(existing.recordedAt) >= Date.parse(ping.recorded_at)
+            ) {
+              continue;
+            }
             next[userId] = {
               userId,
               lat: ping.location.coordinates[1],
@@ -268,14 +285,29 @@ export default function ComplicationsView({
           }
           return next;
         });
-      })
-      .catch(() => {});
+      } catch {
+        // The live broadcast path still flows without the catch-up.
+      }
+    };
+    void seed();
+    const reseed = setInterval(() => void seed(), 15000);
     const unsubscribe = subscribeToLocationFixes(sessionId, (fix) => {
-      if (!live || !activity.live || activityRef.current !== activityKey) return;
-      setFixes((prev) => ({ ...prev, [fix.userId]: fix }));
+      if (!current()) return;
+      if (fix.userId === myId) return;
+      setFixes((prev) => {
+        const existing = prev[fix.userId];
+        if (
+          existing &&
+          Date.parse(existing.recordedAt) > Date.parse(fix.recordedAt)
+        ) {
+          return prev;
+        }
+        return { ...prev, [fix.userId]: fix };
+      });
     });
     return () => {
       live = false;
+      clearInterval(reseed);
       unsubscribe();
     };
   }, [sessionId, myId, activityKey]);
