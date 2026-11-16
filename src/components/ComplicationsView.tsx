@@ -20,13 +20,19 @@ import { Image, Pressable, ScrollView, Text, View } from 'react-native';
 import RideMap from './RideMap';
 import type { LatLng } from './rideMapGeometry';
 import * as Location from 'expo-location';
-import { Music2, Pause, Play } from 'lucide-react-native';
+import { Music2, Navigation, Pause, Play, X } from 'lucide-react-native';
 import { runSessionAudio } from '../music/sessionAudio';
 import { useAuth } from '../auth/AuthProvider';
 import { useActiveSession } from '../session/ActiveSessionContext';
 import { fetchParticipants } from '../services/sessionsService';
 import { fetchProfile } from '../services/profilesService';
 import { fetchLatestPings, fetchRoute } from '../services/rideDataService';
+import {
+  distanceToRouteM,
+  fetchNavigation,
+  formatNavDistance,
+  type NavStep,
+} from '../services/navigationService';
 import {
   startLocationSharing,
   subscribeToLocationFixes,
@@ -48,6 +54,19 @@ import type { SessionPlaybackStateRow } from '../services/database.types';
 export type ShellTab = 'ride' | 'pack' | 'music';
 
 const MPS_TO_MPH = 2.23694;
+
+type NavState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | {
+      status: 'active';
+      steps: NavStep[];
+      index: number;
+      distToNextM: number | null;
+      offRoute: boolean;
+    }
+  | { status: 'arrived' };
 
 function haversineM(a: LatLng, b: LatLng): number {
   const R = 6371000;
@@ -103,6 +122,15 @@ export default function ComplicationsView({
   const [center, setCenter] = useState<LatLng | null>(null);
   const [gpsNote, setGpsNote] = useState<string | null>(null);
   const [tileError, setTileError] = useState(false);
+  const [nav, setNav] = useState<NavState>({ status: 'idle' });
+  const navRef = useRef<NavState>(nav);
+  navRef.current = nav;
+  const routeLineRef = useRef<LatLng[]>([]);
+  routeLineRef.current = routeLine;
+  const navTickRef = useRef<(pos: LatLng) => void>(() => {});
+  const offRouteCountRef = useRef(0);
+  const reroutingRef = useRef(false);
+  const lastRerouteRef = useRef(0);
   const [now, setNow] = useState(Date.now());
   const [playback, setPlayback] =
     useState<SessionPlaybackStateRow | null>(null);
@@ -116,6 +144,7 @@ export default function ComplicationsView({
     setDistanceM(0); setRouteLine([]); setRouteName(null); setRouteError(null);
     setCenter(null); setGpsNote(null); setTileError(false);
     setPlayback(null); setNowPlaying(null); lastPosRef.current = null;
+    setNav({ status: 'idle' }); offRouteCountRef.current = 0;
     intervalStartedRef.current = Date.now(); setNow(Date.now());
     return () => { activity.live = false; ++playbackRequestRef.current; };
   }, [activityKey]);
@@ -251,6 +280,100 @@ export default function ComplicationsView({
     };
   }, [sessionId, myId, activityKey]);
 
+  // --- turn-by-turn navigation (per rider, local to this phone) ---
+  const startNavigation = async () => {
+    if (routeLineRef.current.length < 2 || navRef.current.status === 'loading') return;
+    setNav({ status: 'loading' });
+    try {
+      const { steps, geometry } = await fetchNavigation(routeLineRef.current);
+      if (steps.length < 2) {
+        throw new Error('Directions came back empty for this route.');
+      }
+      // The steps and the drawn line now come from the same response,
+      // so they cannot disagree.
+      setRouteLine(geometry);
+      offRouteCountRef.current = 0;
+      setNav({ status: 'active', steps, index: 0, distToNextM: null, offRoute: false });
+    } catch (err) {
+      setNav({
+        status: 'error',
+        message: err instanceof Error ? err.message : 'Could not get directions.',
+      });
+    }
+  };
+
+  const maybeReroute = async (pos: LatLng) => {
+    if (reroutingRef.current) return;
+    if (Date.now() - lastRerouteRef.current < 20000) return;
+    reroutingRef.current = true;
+    lastRerouteRef.current = Date.now();
+    try {
+      const line = routeLineRef.current;
+      let nearest = 0;
+      let best = Infinity;
+      line.forEach((p, i) => {
+        const d = haversineM(pos, p);
+        if (d < best) {
+          best = d;
+          nearest = i;
+        }
+      });
+      const remaining = [pos, ...line.slice(nearest + 1)];
+      if (remaining.length < 2) return;
+      const { steps, geometry } = await fetchNavigation(remaining);
+      setRouteLine(geometry);
+      offRouteCountRef.current = 0;
+      setNav((prev) =>
+        prev.status === 'active'
+          ? { status: 'active', steps, index: 0, distToNextM: null, offRoute: false }
+          : prev
+      );
+    } catch {
+      // Keep the old steps; the banner keeps showing Off route.
+    } finally {
+      reroutingRef.current = false;
+    }
+  };
+
+  navTickRef.current = (pos: LatLng) => {
+    const current = navRef.current;
+    if (current.status !== 'active') return;
+    let updated = current;
+    const line = routeLineRef.current;
+    if (line.length > 1) {
+      if (distanceToRouteM(pos, line) > 50) {
+        offRouteCountRef.current += 1;
+        if (offRouteCountRef.current >= 2) {
+          if (!updated.offRoute) updated = { ...updated, offRoute: true };
+          void maybeReroute(pos);
+        }
+      } else if (offRouteCountRef.current !== 0) {
+        offRouteCountRef.current = 0;
+        if (updated.offRoute && !reroutingRef.current) {
+          updated = { ...updated, offRoute: false };
+        }
+      }
+    }
+    const next = current.steps[current.index + 1];
+    if (!next) {
+      setNav({ status: 'arrived' });
+      return;
+    }
+    const dNext = haversineM(pos, next.location);
+    if (dNext < (next.type === 'arrive' ? 30 : 25)) {
+      if (next.type === 'arrive') {
+        setNav({ status: 'arrived' });
+      } else {
+        setNav({ ...updated, index: current.index + 1, distToNextM: null });
+      }
+      return;
+    }
+    if (updated.distToNextM === null || Math.abs(updated.distToNextM - dNext) > 1) {
+      updated = { ...updated, distToNextM: dNext };
+    }
+    if (updated !== current) setNav(updated);
+  };
+
   // --- own GPS: stats, trail, and sharing to the pack ---
   useEffect(() => {
     if (!sessionId || !myId) return;
@@ -277,6 +400,7 @@ export default function ComplicationsView({
         setTrail([pos]);
       }
       lastPosRef.current = pos;
+      navTickRef.current(pos);
     };
     (async () => {
       try {
@@ -419,6 +543,11 @@ export default function ComplicationsView({
     );
   }
 
+  const navNext =
+    nav.status === 'active' ? nav.steps[nav.index + 1] : undefined;
+  const navThen =
+    nav.status === 'active' ? nav.steps[nav.index + 2] : undefined;
+
   return (
     <View className="flex-1 bg-ink">
       <View className="flex-row items-center justify-between px-5 pb-1 pt-4">
@@ -465,17 +594,85 @@ export default function ComplicationsView({
         </View>
       </View>
 
-      <RideMap
-        key={activityKey}
-        followCenter={mapCenter}
-        myPos={myPos}
-        riders={riders}
-        routeLine={routeLine}
-        trail={trail}
-        isActive={isActive}
-        onRecenter={() => { if (myPos) setCenter(myPos); }}
-        onTileError={() => setTileError(true)}
-      />
+      <View className="relative">
+        <RideMap
+          key={activityKey}
+          followCenter={mapCenter}
+          myPos={myPos}
+          riders={riders}
+          routeLine={routeLine}
+          trail={trail}
+          isActive={isActive}
+          onRecenter={() => { if (myPos) setCenter(myPos); }}
+          onTileError={() => setTileError(true)}
+        />
+
+        {nav.status === 'idle' && routeLine.length > 1 ? (
+          <View pointerEvents="box-none" className="absolute left-0 right-0 top-6 items-center">
+            <Pressable
+              className="flex-row items-center gap-1.5 rounded-full bg-accent px-3.5 py-2"
+              onPress={() => void startNavigation()}
+            >
+              <Navigation size={13} color="#0A0C10" />
+              <Text className="text-[12px] font-bold text-ink">Start navigation</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {nav.status === 'loading' ? (
+          <View pointerEvents="none" className="absolute left-0 right-0 top-6 items-center">
+            <View className="rounded-full border border-line bg-ink px-3.5 py-2">
+              <Text className="font-mono text-[11px] text-muted">Getting directions...</Text>
+            </View>
+          </View>
+        ) : null}
+
+        {nav.status === 'error' ? (
+          <View className="absolute left-6 right-6 top-6 flex-row items-center gap-2 rounded-xl border border-warn bg-ink p-3">
+            <Pressable className="shrink flex-1" onPress={() => void startNavigation()}>
+              <Text className="text-[12px] font-semibold text-warn">{nav.message}</Text>
+              <Text className="text-[11px] text-muted">Tap to try again</Text>
+            </Pressable>
+            <Pressable onPress={() => setNav({ status: 'idle' })} hitSlop={8}>
+              <X size={16} color="#8A93A6" />
+            </Pressable>
+          </View>
+        ) : null}
+
+        {nav.status === 'active' && navNext ? (
+          <View className="absolute left-6 right-6 top-6 flex-row items-start gap-2.5 rounded-xl border border-line bg-ink/95 p-3">
+            <Navigation size={20} color="#34D399" style={{ marginTop: 2 }} />
+            <View className="shrink flex-1">
+              <Text className="text-[17px] font-bold leading-5 text-fog">
+                {navNext.instruction}
+              </Text>
+              <Text className="mt-0.5 font-mono text-[11px] text-muted" numberOfLines={1}>
+                {nav.offRoute
+                  ? 'Off route, rerouting...'
+                  : nav.distToNextM !== null
+                    ? `in ${formatNavDistance(nav.distToNextM)}`
+                    : 'Starting...'}
+                {navThen ? ` · Then: ${navThen.instruction}` : ''}
+              </Text>
+            </View>
+            <Pressable onPress={() => setNav({ status: 'idle' })} hitSlop={8}>
+              <X size={16} color="#8A93A6" />
+            </Pressable>
+          </View>
+        ) : null}
+
+        {nav.status === 'arrived' ? (
+          <View className="absolute left-6 right-6 top-6 flex-row items-center gap-2.5 rounded-xl border border-accent bg-ink/95 p-3">
+            <Navigation size={18} color="#34D399" />
+            <Text className="shrink flex-1 text-[15px] font-bold text-fog">
+              You have arrived
+            </Text>
+            <Pressable onPress={() => setNav({ status: 'idle' })} hitSlop={8}>
+              <X size={16} color="#8A93A6" />
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
 
       <ScrollView
         horizontal

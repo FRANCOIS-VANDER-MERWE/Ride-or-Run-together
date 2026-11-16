@@ -18,7 +18,7 @@ vi.mock('../../services/liveLocationService', () => ({ startLocationSharing: (..
 vi.mock('../../services/supabaseClient', () => ({ subscribeToTableChanges: (_table: unknown, options: any) => { m.change = options.onChange; return null; }, supabase: null }));
 vi.mock('expo-location', () => ({ requestForegroundPermissionsAsync: () => m.permission(), getCurrentPositionAsync: async () => null, watchPositionAsync: (...x: unknown[]) => m.watch(...x), Accuracy: { Balanced: 3 } }));
 vi.mock('react-native-svg', () => ({ default: 'Svg', Polyline: 'Polyline' }));
-vi.mock('lucide-react-native', () => ({ Music2: 'Music2', Pause: 'Pause', Play: 'Play', AlertTriangle: 'AlertTriangle', CheckCircle2: 'CheckCircle2', RefreshCw: 'RefreshCw', SkipBack: 'SkipBack', SkipForward: 'SkipForward' }));
+vi.mock('lucide-react-native', () => ({ Music2: 'Music2', Pause: 'Pause', Play: 'Play', AlertTriangle: 'AlertTriangle', CheckCircle2: 'CheckCircle2', RefreshCw: 'RefreshCw', SkipBack: 'SkipBack', SkipForward: 'SkipForward', Navigation: 'Navigation', X: 'X' }));
 vi.mock('../../music/providers/AppleMusicProvider', () => ({ appleMusicProvider: m.provider }));
 import ComplicationsView from '../ComplicationsView';
 import MusicSyncDeck from '../MusicSyncDeck';
