@@ -41,10 +41,8 @@ export async function createSession(
         coordinates: [input.meetup.lng, input.meetup.lat],
       }
     : null;
-  const { data: session, error } = await db
-    .from('ride_sessions')
-    .insert({
-      host_id: hostId,
+  const { data, error } = await db.rpc('create_session', {
+    p_input: {
       title: input.title,
       description: input.description ?? null,
       route_id: input.routeId ?? null,
@@ -53,35 +51,11 @@ export async function createSession(
       meetup_location: meetupLocation,
       is_no_drop: input.isNoDrop ?? true,
       scheduled_start: input.scheduledStart ?? null,
-      status: 'lobby',
-    })
-    .select('*')
-    .single();
-  if (error || !session) {
-    throw new Error(`[Supabase] createSession: ${error?.message}`);
-  }
-  const { error: participantError } = await db
-    .from('session_participants')
-    .insert({
-      session_id: session.session_id,
-      user_id: hostId,
-      role: 'host',
-      status: 'joined',
-    });
-  if (participantError) {
-    throw new Error(
-      `[Supabase] createSession participant: ${participantError.message}`
-    );
-  }
-  const { error: playbackError } = await db
-    .from('session_playback_state')
-    .insert({ session_id: session.session_id, dj_user_id: hostId });
-  if (playbackError) {
-    throw new Error(
-      `[Supabase] createSession playback state: ${playbackError.message}`
-    );
-  }
-  return session;
+    },
+  });
+  if (error) throwSessionError('createSession', error);
+  if (!data) throw new Error('Session creation returned no session.');
+  return data;
 }
 
 export async function fetchSession(
@@ -159,16 +133,8 @@ export async function setSessionStatus(
   status: SessionStatus
 ): Promise<void> {
   const db = requireSupabase();
-  const patch: Partial<RideSessionRow> = { status };
-  if (status === 'active') patch.started_at = new Date().toISOString();
-  if (status === 'completed' || status === 'cancelled') {
-    patch.ended_at = new Date().toISOString();
-  }
-  const { error } = await db
-    .from('ride_sessions')
-    .update(patch)
-    .eq('session_id', sessionId);
-  if (error) throw new Error(`[Supabase] setSessionStatus: ${error.message}`);
+  const { error } = await db.rpc('set_session_status', { p_session_id: sessionId, p_status: status });
+  if (error) throwSessionError('setSessionStatus', error);
 }
 
 export async function fetchParticipants(
@@ -192,22 +158,11 @@ export async function joinSession(
   bikeId?: string
 ): Promise<SessionParticipantRow> {
   const db = requireSupabase();
-  const { data, error } = await db
-    .from('session_participants')
-    .upsert(
-      {
-        session_id: sessionId,
-        user_id: userId,
-        bike_id: bikeId ?? null,
-        role: 'guest',
-        status: 'joined',
-        left_at: null,
-      },
-      { onConflict: 'session_id,user_id' }
-    )
-    .select('*')
-    .single();
-  if (error) throw new Error(`[Supabase] joinSession: ${error.message}`);
+  const { data, error } = await db.rpc('join_session', {
+    p_session_id: sessionId,
+    ...(bikeId ? { p_bike_id: bikeId } : {}),
+  });
+  if (error) throwSessionError('joinSession', error);
   return data;
 }
 
@@ -217,19 +172,8 @@ export async function setMyParticipantStatus(
   status: ParticipantStatus
 ): Promise<void> {
   const db = requireSupabase();
-  const patch: Partial<SessionParticipantRow> = { status };
-  const now = new Date().toISOString();
-  if (status === 'riding') patch.started_at = now;
-  if (status === 'finished') patch.finished_at = now;
-  if (status === 'left') patch.left_at = now;
-  const { error } = await db
-    .from('session_participants')
-    .update(patch)
-    .eq('session_id', sessionId)
-    .eq('user_id', userId);
-  if (error) {
-    throw new Error(`[Supabase] setMyParticipantStatus: ${error.message}`);
-  }
+  const { error } = await db.rpc('set_participant_status', { p_session_id: sessionId, p_status: status });
+  if (error) throwSessionError('setMyParticipantStatus', error);
 }
 
 export async function sendInvite(
@@ -271,12 +215,34 @@ export async function respondToInvite(
   response: Extract<InviteStatus, 'accepted' | 'declined'>
 ): Promise<void> {
   const db = requireSupabase();
-  const { error } = await db
-    .from('session_invites')
-    .update({ status: response, responded_at: new Date().toISOString() })
-    .eq('invite_id', invite.invite_id);
-  if (error) throw new Error(`[Supabase] respondToInvite: ${error.message}`);
-  if (response === 'accepted') {
-    await joinSession(invite.session_id, invite.invitee_id);
+  const { error } = await db.rpc('respond_to_session_invite', { p_invite_id: invite.invite_id, p_response: response });
+  if (error) throwSessionError('respondToInvite', error);
+}
+
+export const MEMBERSHIP_CONFLICT_MESSAGE = 'You are already in a session. Leave your current session before joining another.';
+
+function throwSessionError(operation: string, error: { code?: string; message: string; details?: string | null }): never {
+  if (error.code === '23505' && `${error.message} ${error.details ?? ''}`.includes('session_participants_one_current_per_user')) {
+    throw new Error(MEMBERSHIP_CONFLICT_MESSAGE);
   }
+  throw new Error(`[Supabase] ${operation}: ${error.message}`);
+}
+
+export type CurrentSession = RideSessionRow & { participationJoinedAt?: string };
+
+/** One committed snapshot; a cached room ID is never evidence of membership. */
+export async function fetchCurrentSession(userId: string): Promise<CurrentSession | null> {
+  const { data, error } = await requireSupabase()
+    .from('session_participants')
+    .select('joined_at, session:ride_sessions!inner(*)')
+    .eq('user_id', userId)
+    .in('status', ['joined', 'riding', 'paused']);
+  if (error) throwSessionError('fetchCurrentSession', error);
+  const rows = (data ?? []) as unknown as { joined_at: string; session: RideSessionRow }[];
+  if (rows.length > 1) throw new Error('Multiple current memberships found. Resolve the database conflict before continuing.');
+  // Do not hide corrupt terminal-current rows with a server-side parent filter.
+  if (rows[0] && ['completed', 'cancelled'].includes(rows[0].session.status)) {
+    throw new Error('Current membership points to an ended session. Reconcile the database before continuing.');
+  }
+  return rows[0] ? { ...rows[0].session, participationJoinedAt: rows[0].joined_at } : null;
 }

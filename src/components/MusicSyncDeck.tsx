@@ -29,6 +29,7 @@ import {
   SkipBack,
   SkipForward,
 } from 'lucide-react-native';
+import { runSessionAudio } from '../music/sessionAudio';
 import { useAuth } from '../auth/AuthProvider';
 import { useActiveSession } from '../session/ActiveSessionContext';
 import {
@@ -78,11 +79,14 @@ export default function MusicSyncDeck() {
   // Pack publishing: plays in this tab also queue into the active
   // session's shared queue, so the rest of the pack sees the song.
   const auth = useAuth();
-  const { activeSession } = useActiveSession();
+  const { activeSession, participationKey } = useActiveSession();
+  const activityKey = `${auth.user?.id ?? ''}:${participationKey ?? activeSession?.session_id ?? 'local'}`;
+  const activityRef = useRef(activityKey);
+  activityRef.current = activityKey;
+  const ownerRef = useRef({ key: activityKey, live: true });
+  if (ownerRef.current.key !== activityKey) ownerRef.current = { key: activityKey, live: true };
+  const activity = ownerRef.current;
   const lastPublishedRef = useRef<string | null>(null);
-  const suppressPublishRef = useRef(false);
-  const followedItemRef = useRef<string | null>(null);
-  const followBusyRef = useRef(false);
   const [packSyncError, setPackSyncError] = useState<string | null>(null);
   const [lastPublishedTitle, setLastPublishedTitle] = useState<string | null>(
     null
@@ -90,10 +94,10 @@ export default function MusicSyncDeck() {
   const [packLinkStatus, setPackLinkStatus] = useState('not connected');
   const [lastPackEventAt, setLastPackEventAt] = useState<string | null>(null);
   const [followNotice, setFollowNotice] = useState<string | null>(null);
-  const publishToPack = (track: CanonicalTrack) => {
+  const publishToPack = (track: CanonicalTrack, valid: () => boolean) => {
     const sessionId = activeSession?.session_id;
     const userId = auth.user?.id;
-    if (!sessionId || !userId) return;
+    if (!valid() || !sessionId || !userId) return;
     const key = `${sessionId}:${track.providerIds.apple ?? track.isrc ?? track.title}`;
     if (lastPublishedRef.current === key) return;
     lastPublishedRef.current = key;
@@ -107,12 +111,14 @@ export default function MusicSyncDeck() {
       album: track.album ?? undefined,
       durationMs: track.durationMs ?? undefined,
       artworkUrl: track.artworkUrl ?? undefined,
-    })
+    }, valid)
       .then(() => {
+        if (!valid()) return;
         setPackSyncError(null);
         setLastPublishedTitle(track.title);
       })
       .catch((err: unknown) => {
+        if (!valid()) return;
         lastPublishedRef.current = null;
         setPackSyncError(
           err instanceof Error
@@ -137,6 +143,15 @@ export default function MusicSyncDeck() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [barWidth, setBarWidth] = useState(260);
+
+  useEffect(() => {
+    activity.live = true;
+    lastPublishedRef.current = null;
+    setLastPublishedTitle(null); setPackSyncError(null); setFollowNotice(null);
+    setPackLinkStatus('not connected'); setLastPackEventAt(null);
+    setCurrent(null); setSnapshot(null); setCurrentResultIndex(-1); setBusy(false); setError(null);
+    return () => { activity.live = false; void runSessionAudio(() => true, () => provider.pause()); };
+  }, [activityKey, provider]);
 
   // --- initial auth state ---
   useEffect(() => {
@@ -199,26 +214,22 @@ export default function MusicSyncDeck() {
     }
   };
 
-  const playTrack = async (track: CanonicalTrack, index: number) => {
-    setBusy(true);
-    setError(null);
+  const playTrack = async (track: CanonicalTrack, index: number, publish = true, valid = () => activity.live && activityRef.current === activityKey) => {
+    if (!valid()) return;
+    setBusy(true); setError(null);
     try {
-      await provider.playTrack(track, 0);
-      setCurrent(track);
-      if (suppressPublishRef.current) {
-        suppressPublishRef.current = false;
-      } else {
-        publishToPack(track);
-      }
-      setCurrentResultIndex(index);
-      const snap = await provider.getSnapshot();
-      setSnapshot(snap);
+      await runSessionAudio(valid, async () => {
+        await provider.playTrack(track, 0);
+        if (!valid()) return;
+        setCurrent(track); setCurrentResultIndex(index);
+        if (publish) publishToPack(track, valid);
+        const snap = await provider.getSnapshot();
+        if (valid()) setSnapshot(snap);
+      });
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'That track could not be played.'
-      );
+      if (valid()) setError(err instanceof Error ? err.message : 'That track could not be played.');
     } finally {
-      setBusy(false);
+      if (valid()) setBusy(false);
     }
   };
 
@@ -235,129 +246,90 @@ export default function MusicSyncDeck() {
   useEffect(() => {
     if (!activeSessionId || !myUserId) return;
     let live = true;
-    const handleState = async (
-      row: SessionPlaybackStateRow | null,
-      fromInitialFetch: boolean
-    ) => {
-      if (!live || !row) return;
-      if (row.dj_user_id === myUserId) return;
-      if (!row.current_item_id) return;
-      if (
-        fromInitialFetch &&
-        row.position_updated_at &&
-        Date.now() - new Date(row.position_updated_at).getTime() > 10 * 60 * 1000
-      ) {
+    let following = false;
+    let followedItem: string | null = null;
+    const valid = () => live && activity.live && activityRef.current === activityKey;
+    const handleState = async (row: SessionPlaybackStateRow | null, fromInitialFetch: boolean) => {
+      if (!valid() || !row || row.session_id !== activeSessionId || row.dj_user_id === myUserId || !row.current_item_id) return;
+      if (fromInitialFetch && row.position_updated_at && Date.now() - new Date(row.position_updated_at).getTime() > 10 * 60 * 1000) {
         return; // stale state from an earlier ride; do not autoplay it
       }
-      if (row.current_item_id !== followedItemRef.current) {
+      if (row.current_item_id !== followedItem) {
         if (!appleConnected) {
-          followedItemRef.current = row.current_item_id;
-          setFollowNotice(
-            'The pack started a new track. Connect Apple Music above to hear it here.'
-          );
+          setFollowNotice('The pack started a new track. Connect Apple Music above to hear it here.');
           return;
         }
-        if (followBusyRef.current) return;
-        followBusyRef.current = true;
+        if (following) return;
+        following = true;
         try {
           const entries = await fetchSessionQueueWithTracks(activeSessionId);
-          const entry = entries.find(
-            (e) => e.item.queue_item_id === row.current_item_id
-          );
-          const track = entry?.track ?? null;
+          if (!valid()) return;
+          const track = entries.find(e => e.item.queue_item_id === row.current_item_id)?.track;
           if (!track || track.provider !== 'apple_music') return;
           const pid = track.provider_track_id;
           if (pid.startsWith('isrc:') || pid.startsWith('manual-')) {
-            followedItemRef.current = row.current_item_id;
-            setPackSyncError(
-              `The pack is playing ${track.title}, but this device cannot resolve it to an Apple Music track.`
-            );
+            setPackSyncError(`The pack is playing ${track.title}, but this device cannot resolve it to an Apple Music track.`);
             return;
           }
           const canonical: CanonicalTrack = {
-            isrc: '',
-            title: track.title,
-            artist: track.artist,
-            album: track.album ?? undefined,
-            artworkUrl: track.artwork_url ?? undefined,
-            durationMs: track.duration_ms ?? 0,
-            bpm: null,
-            providerIds: { apple: pid },
+            isrc: '', title: track.title, artist: track.artist, album: track.album ?? undefined,
+            artworkUrl: track.artwork_url ?? undefined, durationMs: track.duration_ms ?? 0, bpm: null, providerIds: { apple: pid },
           };
-          followedItemRef.current = row.current_item_id;
-          suppressPublishRef.current = true;
-          await playTrackRef.current(canonical, -1);
-          if (!row.is_playing) {
-            await provider.pause().catch(() => {});
-            setSnapshot(await provider.getSnapshot().catch(() => null));
-          }
+          followedItem = row.current_item_id;
+          await playTrackRef.current(canonical, -1, false, valid);
+          if (!valid()) return;
+          if (!row.is_playing) await runSessionAudio(valid, async () => {
+            await provider.pause();
+            if (!valid()) return;
+            const snap = await provider.getSnapshot().catch(() => null);
+            if (valid()) setSnapshot(snap);
+          });
         } catch (err) {
-          setPackSyncError(
-            err instanceof Error ? err.message : 'Pack playback failed.'
-          );
-        } finally {
-          followBusyRef.current = false;
-        }
+          if (valid()) setPackSyncError(err instanceof Error ? err.message : 'Pack playback failed.');
+        } finally { following = false; }
       } else {
         try {
-          const snap = await provider.getSnapshot();
-          if (row.is_playing && snap && !snap.isPlaying) {
-            await provider.resume();
-            setSnapshot(await provider.getSnapshot());
-          } else if (!row.is_playing && snap?.isPlaying) {
-            await provider.pause();
-            setSnapshot(await provider.getSnapshot());
-          }
+          await runSessionAudio(valid, async () => {
+            const snap = await provider.getSnapshot();
+            if (!valid()) return;
+            if (row.is_playing && snap && !snap.isPlaying) await provider.resume();
+            else if (!row.is_playing && snap?.isPlaying) await provider.pause();
+            if (!valid()) return;
+            const fresh = await provider.getSnapshot();
+            if (valid()) setSnapshot(fresh);
+          });
         } catch {
           // Snapshot races while following are harmless.
         }
       }
     };
-    void fetchPlaybackState(activeSessionId)
-      .then((row) => handleState(row, true))
-      .catch(() => {});
+    void fetchPlaybackState(activeSessionId).then(row => handleState(row, true)).catch(() => {});
     const channel = subscribeToTableChanges('session_playback_state', {
       sessionId: activeSessionId,
-      onStatus: (status) => {
-        setPackLinkStatus(
-          status === 'SUBSCRIBED'
-            ? 'live'
-            : status.toLowerCase().replace(/_/g, ' ')
-        );
-      },
-      onChange: (payload) => {
+      onStatus: status => { if (valid()) setPackLinkStatus(status === 'SUBSCRIBED' ? 'live' : status.toLowerCase().replace(/_/g, ' ')); },
+      onChange: payload => {
+        if (!valid()) return;
         setLastPackEventAt(new Date().toLocaleTimeString());
-        void handleState(
-          payload.new as unknown as SessionPlaybackStateRow,
-          false
-        );
+        void handleState(payload.new as unknown as SessionPlaybackStateRow, false);
       },
     });
-    return () => {
-      live = false;
-      if (channel && supabase) void supabase.removeChannel(channel);
-    };
-  }, [activeSessionId, myUserId, appleConnected]);
+    return () => { live = false; if (channel && supabase) void supabase.removeChannel(channel); };
+  }, [activeSessionId, myUserId, appleConnected, activityKey]);
 
   const handleToggle = async () => {
     if (!current) return;
+    const valid = () => activity.live && activityRef.current === activityKey;
     try {
-      const pausing = !!snapshot?.isPlaying;
-      if (pausing) {
-        await provider.pause();
-      } else {
-        await provider.resume();
-      }
-      setSnapshot(await provider.getSnapshot());
-      if (activeSession && auth.user) {
-        void updatePlaybackState(activeSession.session_id, {
-          is_playing: !pausing,
-          dj_user_id: auth.user.id,
-        }).catch(() => {});
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Playback control failed.');
-    }
+      await runSessionAudio(valid, async () => {
+        const pausing = !!snapshot?.isPlaying;
+        if (pausing) await provider.pause(); else await provider.resume();
+        if (!valid()) return;
+        const snap = await provider.getSnapshot();
+        if (!valid()) return;
+        setSnapshot(snap);
+        if (activeSession && auth.user) void updatePlaybackState(activeSession.session_id, { is_playing: !pausing, dj_user_id: auth.user.id }).catch(() => {});
+      });
+    } catch (err) { if (valid()) setError(err instanceof Error ? err.message : 'Playback control failed.'); }
   };
 
   const handleSkip = async (delta: number) => {

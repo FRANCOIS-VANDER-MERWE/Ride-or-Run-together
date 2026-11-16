@@ -172,11 +172,15 @@ export async function enqueueTrack(
   sessionId: string,
   userId: string,
   track: ProviderTrackInput,
-  sourcePlaylistId?: string
+  sourcePlaylistId?: string,
+  isCurrent: () => boolean = () => true
 ): Promise<SessionQueueRow> {
   const db = requireSupabase();
+  if (!isCurrent()) throw new Error('Session activity ended.');
   const trackRow = await upsertTrack(track);
+  if (!isCurrent()) throw new Error('Session activity ended.');
   const queue = await fetchSessionQueue(sessionId);
+  if (!isCurrent()) throw new Error('Session activity ended.');
   const nextPosition =
     queue.reduce((max, item) => Math.max(max, item.position), 0) + 1;
   const { data, error } = await db
@@ -284,26 +288,33 @@ export async function fetchSessionQueueWithTracks(
 export async function publishNowPlaying(
   sessionId: string,
   userId: string,
-  input: ProviderTrackInput
+  input: ProviderTrackInput,
+  isCurrent: () => boolean = () => true
 ): Promise<void> {
+  if (!isCurrent()) return;
   const trackRow = await upsertTrack(input);
+  if (!isCurrent()) return;
   const queue = await fetchSessionQueue(sessionId);
+  if (!isCurrent()) return;
   let item = queue.find(
     (q) =>
       q.track_id === trackRow.track_id &&
       (q.status === 'queued' || q.status === 'playing')
   );
   if (!item) {
-    item = await enqueueTrack(sessionId, userId, input);
+    item = await enqueueTrack(sessionId, userId, input, undefined, isCurrent);
+    if (!isCurrent()) return;
   }
   const previous = queue.find(
     (q) => q.status === 'playing' && q.queue_item_id !== item.queue_item_id
   );
   if (previous) {
     await setQueueItemStatus(previous.queue_item_id, 'played');
+    if (!isCurrent()) return;
   }
   if (item.status !== 'playing') {
     await setQueueItemStatus(item.queue_item_id, 'playing');
+    if (!isCurrent()) return;
   }
   await updatePlaybackState(sessionId, {
     current_item_id: item.queue_item_id,

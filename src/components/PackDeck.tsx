@@ -32,6 +32,7 @@ import type {
   RouteRow,
 } from '../services/database.types';
 import {
+  MEMBERSHIP_CONFLICT_MESSAGE,
   createSession,
   fetchDiscoverableSessions,
   fetchMyInvites,
@@ -94,7 +95,7 @@ const VISIBILITIES: SessionVisibility[] = ['private', 'friends', 'public'];
 
 export default function PackDeck() {
   const auth = useAuth();
-  const { activeSession, setActiveSession } = useActiveSession();
+  const { activeSession, setActiveSession, refreshActiveSession, membershipLoading, membershipError, participationKey } = useActiveSession();
   const myId = auth.user?.id ?? null;
 
   const [loading, setLoading] = useState(true);
@@ -160,8 +161,25 @@ export default function PackDeck() {
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<ProfileRow[]>([]);
 
+  const accountRef = useRef({ id: myId, live: true });
+  if (accountRef.current.id !== myId) accountRef.current = { id: myId, live: true };
+  const account = accountRef.current;
+  useEffect(() => { account.live = true; return () => { account.live = false; }; }, [account]);
+  const actionBusyRef = useRef(false);
+  const refreshGeneration = useRef(0);
+  const roomRef = useRef({ id: null as string | null, generation: 0 });
+  const liveGeneration = useRef(0);
+  const activityRef = useRef({ userId: myId, key: participationKey, id: activeSession?.session_id });
+  if (activityRef.current.userId !== myId || activityRef.current.key !== participationKey) {
+    roomRef.current = { id: null, generation: roomRef.current.generation + 1 };
+    ++liveGeneration.current;
+  }
+  activityRef.current = { userId: myId, key: participationKey, id: activeSession?.session_id };
+
   const refresh = useCallback(async () => {
     if (!myId) return;
+    const request = ++refreshGeneration.current;
+    const valid = () => (accountRef.current === account && account.live) && refreshGeneration.current === request;
     try {
       const [mine, disc, inv, fr, req] = await Promise.all([
         fetchMySessions(myId),
@@ -170,6 +188,7 @@ export default function PackDeck() {
         fetchFriends(myId),
         fetchIncomingRequests(myId),
       ]);
+      if (!valid()) return;
       setMySessions(mine);
       const myIds = new Set(mine.map((s) => s.session_id));
       setDiscover(disc.filter((s) => !myIds.has(s.session_id)));
@@ -180,130 +199,142 @@ export default function PackDeck() {
       for (const invite of inv) {
         sessionMap[invite.session_id] = await fetchSession(invite.session_id);
       }
+      if (!valid()) return;
       setInviteSessions(sessionMap);
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load.');
+      if (valid()) setError(err instanceof Error ? err.message : 'Failed to load.');
     } finally {
-      setLoading(false);
+      if (valid()) setLoading(false);
     }
-  }, [myId]);
+  }, [myId, account]);
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, participationKey]);
 
-  const run = async (fn: () => Promise<void>, done?: string) => {
+  const run = async (fn: (valid: () => boolean) => Promise<void>, done?: string) => {
+    if (actionBusyRef.current) return;
+    actionBusyRef.current = true;
+    const key = activityRef.current.key;
+    const room = roomRef.current.generation;
+    const sameAccount = () => (accountRef.current === account && account.live);
+    const valid = () => sameAccount() && key === activityRef.current.key && room === roomRef.current.generation;
     setBusy(true);
     setError(null);
     setInfo(null);
     try {
-      await fn();
+      await fn(valid);
+      if (!valid()) return;
+      await refreshActiveSession();
+      if (!valid()) return;
       if (done) setInfo(done);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action failed.');
+      if (!valid()) return;
+      await refreshActiveSession();
+      if (valid()) setError(err instanceof Error ? err.message : 'Action failed.');
     } finally {
-      setBusy(false);
+      if (sameAccount()) { actionBusyRef.current = false; setBusy(false); }
     }
   };
 
   const stopLive = useCallback(async () => {
-    if (sharingHandleRef.current) {
-      await sharingHandleRef.current.stop();
-      sharingHandleRef.current = null;
-    }
+    ++liveGeneration.current;
+    const handle = sharingHandleRef.current;
+    sharingHandleRef.current = null;
+    fixesUnsubRef.current?.();
+    fixesUnsubRef.current = null;
+    liveSessionRef.current = null;
     setSharing(false);
-    if (fixesUnsubRef.current) {
-      fixesUnsubRef.current();
-      fixesUnsubRef.current = null;
-    }
-    if (liveSessionRef.current) {
-      await releaseLocationChannel(liveSessionRef.current);
-      liveSessionRef.current = null;
-    }
     setLiveFixes({});
+    await handle?.stop();
   }, []);
 
-
-  const startLiveView = useCallback(
-    async (session: RideSessionRow) => {
-      if (session.status !== 'active') return;
-      try {
-        const latest = await fetchLatestPings(session.session_id);
-        const initial: Record<string, LiveFix> = {};
-        for (const [userId, ping] of latest) {
-          initial[userId] = {
-            userId,
-            lat: ping.location.coordinates[1],
-            lng: ping.location.coordinates[0],
-            speedMps: ping.speed_mps,
-            headingDeg: ping.heading_deg,
-            recordedAt: ping.recorded_at,
-          };
-        }
-        setLiveFixes(initial);
-      } catch {
-        // Catch-up is best effort; live fixes still arrive.
-      }
-      liveSessionRef.current = session.session_id;
-      fixesUnsubRef.current = subscribeToLocationFixes(
-        session.session_id,
-        (fix) => {
-          setLiveFixes((prev) => ({ ...prev, [fix.userId]: fix }));
-        }
-      );
-    },
-    []
-  );
+  const startLiveView = useCallback(async (session: RideSessionRow) => {
+    if (session.status !== 'active' || activityRef.current.id !== session.session_id) return;
+    const generation = liveGeneration.current;
+    const room = roomRef.current.generation;
+    const valid = () => liveGeneration.current === generation && roomRef.current.generation === room && activityRef.current.id === session.session_id;
+    try {
+      const latest = await fetchLatestPings(session.session_id);
+      if (!valid()) return;
+      const initial: Record<string, LiveFix> = {};
+      for (const [userId, ping] of latest) initial[userId] = {
+        userId, lat: ping.location.coordinates[1], lng: ping.location.coordinates[0],
+        speedMps: ping.speed_mps, headingDeg: ping.heading_deg, recordedAt: ping.recorded_at,
+      };
+      setLiveFixes(initial);
+    } catch {
+      // Catch-up is best effort; live fixes still arrive.
+    }
+    if (!valid()) return;
+    liveSessionRef.current = session.session_id;
+    fixesUnsubRef.current = subscribeToLocationFixes(session.session_id, fix => {
+      if (valid()) setLiveFixes(prev => ({ ...prev, [fix.userId]: fix }));
+    });
+  }, []);
 
   const toggleSharing = async (session: RideSessionRow) => {
-    if (!myId) return;
+    if (!myId || activityRef.current.id !== session.session_id) return;
     if (sharing) {
       await stopLive();
       // Keep viewing fixes after stopping our own broadcast.
       void startLiveView(session);
       return;
     }
-    const handle = await startLocationSharing(session.session_id, myId, (reason) =>
-      setError(reason)
-    );
+    const generation = liveGeneration.current;
+    const userId = myId;
+    const key = activityRef.current.key;
+    const valid = () => generation === liveGeneration.current && activityRef.current.userId === userId && activityRef.current.key === key && roomRef.current.id === session.session_id;
+    const handle = await startLocationSharing(session.session_id, userId, reason => { if (valid()) setError(reason); }, valid);
+    if (!valid()) { await handle?.stop(); return; }
     if (handle) {
       sharingHandleRef.current = handle;
       setSharing(true);
-      void setMyParticipantStatus(session.session_id, myId, 'riding').catch(
-        () => undefined
-      );
+      void setMyParticipantStatus(session.session_id, userId, 'riding').catch(async err => {
+        if (!valid()) return;
+        setError(err instanceof Error ? err.message : 'Could not start sharing.');
+        await stopLive();
+        await refreshActiveSession();
+      });
     }
   };
 
   const loadQueue = useCallback(async (sessionId: string) => {
+    const room = roomRef.current.generation;
+    const key = activityRef.current.key;
+    const valid = () => roomRef.current.id === sessionId && roomRef.current.generation === room && activityRef.current.key === key;
+    if (!valid()) return;
     try {
       const [entries, state] = await Promise.all([
         fetchSessionQueueWithTracks(sessionId),
         fetchPlaybackState(sessionId),
       ]);
+      if (!valid()) return;
       setQueueEntries(entries);
       setPlayback(state);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load queue.');
+      if (valid()) setError(err instanceof Error ? err.message : 'Failed to load queue.');
     }
   }, []);
 
   const stopQueueView = useCallback(async () => {
-    for (const ch of queueChannelsRef.current) {
-      await unsubscribeChannel(ch);
-    }
+    const channels = queueChannelsRef.current;
     queueChannelsRef.current = [];
     setQueueEntries([]);
     setPlayback(null);
+    await Promise.all(channels.map(unsubscribeChannel));
   }, []);
 
   const startQueueView = useCallback(
     (session: RideSessionRow) => {
+      if (roomRef.current.id !== session.session_id || activityRef.current.id !== session.session_id) return;
+      const generation = roomRef.current.generation;
+      const valid = () => roomRef.current.generation === generation && roomRef.current.id === session.session_id && activityRef.current.id === session.session_id;
       void loadQueue(session.session_id);
-      const onChange = () => void loadQueue(session.session_id);
+      const onChange = () => { if (valid()) void loadQueue(session.session_id); };
       const onStatus = (status: string) => {
+        if (!valid()) return;
         setQueueLive(
           status === 'SUBSCRIBED'
             ? 'live'
@@ -329,42 +360,71 @@ export default function PackDeck() {
 
   useEffect(() => {
     return () => {
+      ++roomRef.current.generation;
+      roomRef.current.id = null;
       void stopLive();
       void stopQueueView();
     };
   }, [stopLive, stopQueueView]);
 
-  const toggleExpand = async (session: RideSessionRow) => {
-    if (expandedId === session.session_id) {
-      await stopLive();
-      await stopQueueView();
-      setExpandedId(null);
-      return;
-    }
-    await stopLive();
-    await stopQueueView();
-    setExpandedId(session.session_id);
+  useEffect(() => {
+    ++roomRef.current.generation;
+    roomRef.current.id = null;
+    setExpandedId(null);
     setParticipants([]);
+    setNames({});
+    setSongResults([]);
+    setSongError(null);
+    void stopLive();
+    void stopQueueView();
+  }, [myId, participationKey, stopLive, stopQueueView]);
+
+  useEffect(() => {
+    actionBusyRef.current = false;
+    setBusy(false); setMySessions([]); setDiscover([]); setInvites([]); setInfo(null); setError(null);
+  }, [myId, account]);
+
+  const toggleExpand = async (session: RideSessionRow) => {
+    const closing = roomRef.current.id === session.session_id;
+    const generation = ++roomRef.current.generation;
+    roomRef.current.id = closing ? null : session.session_id;
+    setExpandedId(closing ? null : session.session_id);
+    setParticipants([]);
+    setNames({});
+    setPlanningRoute(false);
+    setSongResults([]);
+    const valid = () => roomRef.current.generation === generation && (accountRef.current === account && account.live);
+    await Promise.all([stopLive(), stopQueueView()]);
+    if (closing || !valid()) return;
     try {
       const rows = await fetchParticipants(session.session_id);
+      if (!valid()) return;
       setParticipants(rows);
-      const map: Record<string, string> = { ...names };
+      const map: Record<string, string> = {};
       for (const row of rows) {
-        if (!map[row.user_id]) {
-          const profile = await fetchProfile(row.user_id);
-          map[row.user_id] = profile?.username ?? row.user_id.slice(0, 8);
-        }
+        const profile = await fetchProfile(row.user_id);
+        if (!valid()) return;
+        map[row.user_id] = profile?.username ?? row.user_id.slice(0, 8);
       }
       setNames(map);
-      void startLiveView(session);
-      startQueueView(session);
+      if (activityRef.current.id === session.session_id) startQueueView(session);
+      else void loadQueue(session.session_id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load riders.');
+      if (valid()) setError(err instanceof Error ? err.message : 'Failed to load riders.');
     }
   };
 
+  useEffect(() => {
+    const generation = roomRef.current.generation;
+    void stopLive().then(() => {
+      if (roomRef.current.generation === generation && expandedId === activeSession?.session_id && activeSession) void startLiveView(activeSession);
+    });
+    return () => { void stopLive(); };
+  }, [expandedId, activeSession?.session_id, activeSession?.status, participationKey, startLiveView, stopLive]);
+
   const handleCreate = () =>
-    run(async () => {
+    run(async valid => {
+      if (activeSession) throw new Error(MEMBERSHIP_CONFLICT_MESSAGE);
       if (!myId) throw new Error('Not signed in.');
       if (newTitle.trim().length < 3) {
         throw new Error('Give the session a title of 3+ characters.');
@@ -374,14 +434,16 @@ export default function PackDeck() {
         visibility: newVisibility,
         routeId: newRouteId ?? undefined,
       });
-      let finalSession = created;
+      if (!valid()) return;
       if (pendingRoute) {
         const route = await createRoute(myId, pendingRoute);
+        if (!valid()) return;
         await setSessionRoute(created.session_id, route.route_id);
         setRoutes((prev) => [route, ...prev]);
-        finalSession = { ...created, route_id: route.route_id };
       }
-      setActiveSession(finalSession);
+      if (!valid()) return;
+      await refreshActiveSession();
+      if (accountRef.current !== account || !account.live) return;
       setNewTitle('');
       setNewRouteId(null);
       setPendingRoute(null);
@@ -394,38 +456,49 @@ export default function PackDeck() {
       prev.map((s) => (s.session_id === session.session_id ? updated : s))
     );
     if (activeSession?.session_id === session.session_id) {
-      setActiveSession(updated);
+      void refreshActiveSession();
     }
   };
 
   const handleAttachRoute = (session: RideSessionRow, routeId: string | null) =>
-    run(async () => {
+    run(async valid => {
       await setSessionRoute(session.session_id, routeId);
+      if (!valid()) return;
       syncSessionRoute(session, routeId);
     }, routeId ? 'Route attached.' : 'Route removed.');
 
   const handlePlanSave =
     (session: RideSessionRow) => async (planned: PlannedRoute) => {
       if (!myId) throw new Error('Not signed in.');
+      const accountAtStart = account;
+      const room = roomRef.current.generation;
+      const valid = () => accountRef.current === accountAtStart && accountAtStart.live && roomRef.current.generation === room;
       const route = await createRoute(myId, planned);
+      if (!valid()) return;
       setRoutes((prev) => [route, ...prev]);
       await setSessionRoute(session.session_id, route.route_id);
+      if (!valid()) return;
       syncSessionRoute(session, route.route_id);
       setPlanningRoute(false);
       setInfo('Route saved and attached.');
     };
 
   const handleJoin = (session: RideSessionRow) =>
-    run(async () => {
+    run(async valid => {
       if (!myId) throw new Error('Not signed in.');
+      if (activeSession && activeSession.session_id !== session.session_id) throw new Error(MEMBERSHIP_CONFLICT_MESSAGE);
       await joinSession(session.session_id, myId);
-      setActiveSession(session);
+      if (valid()) await refreshActiveSession();
     }, `Joined ${session.title}. It is now your active session.`);
 
   const handleLeave = (session: RideSessionRow) =>
-    run(async () => {
+    run(async valid => {
       if (!myId) throw new Error('Not signed in.');
       await setMyParticipantStatus(session.session_id, myId, 'left');
+      if (!valid()) return;
+      ++roomRef.current.generation; roomRef.current.id = null;
+      setExpandedId(null);
+      void stopLive(); void stopQueueView();
       if (activeSession?.session_id === session.session_id) {
         setActiveSession(null);
       }
@@ -478,8 +551,7 @@ export default function PackDeck() {
     );
   }
 
-  const openSession =
-    mySessions.find((s) => s.session_id === expandedId) ?? null;
+  const openSession = activeSession?.session_id === expandedId ? activeSession : mySessions.find(s => s.session_id === expandedId) ?? null;
 
   // ---------- SESSION ROOM (full screen) ----------
   if (openSession) {
@@ -501,6 +573,7 @@ export default function PackDeck() {
           </Pressable>
           <Pressable
             onPress={() => {
+              void refreshActiveSession();
               void refresh();
               void loadQueue(session.session_id);
             }}
@@ -511,6 +584,7 @@ export default function PackDeck() {
           </Pressable>
         </View>
 
+        {membershipError && <Text className="text-[13px] text-danger">{membershipError}</Text>}
         {error && <Text className="text-[13px] text-danger">{error}</Text>}
         {info && <Text className="text-[13px] text-accent">{info}</Text>}
 
@@ -519,33 +593,19 @@ export default function PackDeck() {
           <Text className="text-[12px] font-bold uppercase text-accent">
             {session.status} · {session.visibility} · {isHost ? 'you host' : 'guest'}
           </Text>
-          {isActiveSession ? (
-            <Text className="text-[13px] text-muted">
-              This is your active session. It is the one on your Ride tab.
-            </Text>
-          ) : (
-            session.status !== 'completed' &&
-            session.status !== 'cancelled' && (
-              <Pressable
-                className="items-center rounded-[10px] border border-accent py-[10px]"
-                disabled={busy}
-                onPress={() => setActiveSession(session)}
-              >
-                <Text className="text-[14px] font-extrabold text-accent">
-                  Make this my active session
-                </Text>
-              </Pressable>
-            )
-          )}
+          {!isActiveSession && <Text className="text-[13px] text-muted">Session history. Live activity and membership controls are off.</Text>}
+          {isActiveSession && <Text className="text-[13px] text-muted">This is your active session. It is the one on your Ride tab.</Text>}
+          {isHost && isActiveSession && <Text className="text-[13px] text-muted">End or cancel this session before joining or hosting another.</Text>}
         </View>
 
-        {isHost && session.status === 'lobby' && (
+        {isHost && isActiveSession && session.status === 'lobby' && (
           <Pressable
             className={`items-center rounded-[12px] bg-accent py-3.5 ${busy ? 'opacity-60' : ''}`}
-            disabled={busy}
+            disabled={busy || !isActiveSession}
             onPress={() =>
-              void run(async () => {
+              void run(async valid => {
                 await setSessionStatus(session.session_id, 'active');
+                if (!valid()) return;
                 const updated: RideSessionRow = {
                   ...session,
                   status: 'active',
@@ -556,20 +616,21 @@ export default function PackDeck() {
                     s.session_id === session.session_id ? updated : s
                   )
                 );
-                setActiveSession(updated);
+                await refreshActiveSession();
               }, 'Session is live. It is on your Ride tab now.')
             }
           >
             <Text className="text-[15px] font-extrabold text-ink">Start the ride</Text>
           </Pressable>
         )}
-        {isHost && (session.status === 'active' || session.status === 'lobby') && (
+        {isHost && isActiveSession && !['completed', 'cancelled'].includes(session.status) && (
           <Pressable
             className="items-center rounded-[12px] border border-line py-3"
-            disabled={busy}
+            disabled={busy || !isActiveSession}
             onPress={() =>
-              void run(async () => {
+              void run(async valid => {
                 await setSessionStatus(session.session_id, 'completed');
+                if (!valid()) return;
                 const updated: RideSessionRow = {
                   ...session,
                   status: 'completed',
@@ -587,16 +648,11 @@ export default function PackDeck() {
             <Text className="text-[14px] font-bold text-danger">End session</Text>
           </Pressable>
         )}
-        {!isHost && session.status !== 'completed' && (
+        {!isHost && isActiveSession && session.status !== 'completed' && session.status !== 'cancelled' && (
           <Pressable
             className="items-center rounded-[12px] border border-line py-3"
-            disabled={busy}
-            onPress={() => {
-              void handleLeave(session);
-              setExpandedId(null);
-              void stopLive();
-              void stopQueueView();
-            }}
+            disabled={busy || !isActiveSession}
+            onPress={() => void handleLeave(session)}
           >
             <Text className="text-[14px] font-bold text-danger">Leave session</Text>
           </Pressable>
@@ -605,7 +661,7 @@ export default function PackDeck() {
         {/* RIDERS */}
         <View className="gap-2 rounded-[14px] border border-line bg-panel p-3.5">
           <Text className="mb-1 text-[12px] font-bold tracking-[1.5px] text-accent">
-            RIDERS · {participants.filter((p) => p.status !== 'left').length}
+            RIDERS · {participants.filter((p) => ['joined', 'riding', 'paused'].includes(p.status)).length}
           </Text>
           {participants.length === 0 && (
             <Text className="text-[14px] text-fog">Loading riders...</Text>
@@ -622,7 +678,7 @@ export default function PackDeck() {
                     {p.role} · {p.status}
                   </Text>
                 </View>
-                {session.status === 'active' && (
+                {isActiveSession && session.status === 'active' && (
                   <Text className="text-[12px] text-muted">
                     {fix
                       ? `${fix.lat.toFixed(5)}, ${fix.lng.toFixed(5)}${
@@ -641,7 +697,7 @@ export default function PackDeck() {
               </View>
             );
           })}
-          {session.status === 'active' ? (
+          {isActiveSession && session.status === 'active' ? (
             <Pressable
               className="mt-1 items-center rounded-[10px] border border-line py-[10px]"
               onPress={() => void toggleSharing(session)}
@@ -681,7 +737,7 @@ export default function PackDeck() {
               This session has ended, so its route can no longer change.
             </Text>
           )}
-          {isHost &&
+          {isHost && isActiveSession &&
             (session.status === 'lobby' || session.status === 'active') && (
             <View className="gap-2 pt-1">
               <Pressable
@@ -708,7 +764,7 @@ export default function PackDeck() {
                         <Pressable
                           key={r.route_id}
                           className="rounded-full border border-line px-3 py-1.5"
-                          disabled={busy}
+                          disabled={busy || !isActiveSession}
                           onPress={() => void handleAttachRoute(session, r.route_id)}
                         >
                           <Text className="text-[12px] font-bold text-fog">
@@ -722,7 +778,7 @@ export default function PackDeck() {
               {session.route_id ? (
                 <Pressable
                   className="items-center rounded-[10px] border border-line py-[9px]"
-                  disabled={busy}
+                  disabled={busy || !isActiveSession}
                   onPress={() => void handleAttachRoute(session, null)}
                 >
                   <Text className="text-[13px] font-bold text-danger">Remove route</Text>
@@ -742,7 +798,7 @@ export default function PackDeck() {
               <Text className="font-mono text-[11px] text-muted">{queueLive}</Text>
               <Pressable
                 className="rounded-full border border-line px-2.5 py-[5px]"
-                disabled={busy}
+                disabled={busy || !isActiveSession}
                 onPress={() => void loadQueue(session.session_id)}
               >
                 <Text className="text-[12px] font-bold text-accent">Refresh</Text>
@@ -757,9 +813,9 @@ export default function PackDeck() {
           {playback?.current_item_id && (
             <Pressable
               className="items-center rounded-[10px] border border-line py-[10px]"
-              disabled={busy}
+              disabled={busy || !isActiveSession}
               onPress={() =>
-                void run(async () => {
+                void run(async valid => {
                   await updatePlaybackState(session.session_id, {
                     is_playing: !playback.is_playing,
                   });
@@ -787,16 +843,18 @@ export default function PackDeck() {
                 {entry.item.status === 'queued' && (
                   <Pressable
                     className="rounded-full border border-line px-2.5 py-[5px]"
-                    disabled={busy}
+                    disabled={busy || !isActiveSession}
                     onPress={() =>
-                      void run(async () => {
+                      void run(async valid => {
                         const prev = queueEntries.find(
                           (e) => e.item.status === 'playing'
                         );
                         if (prev && prev.item.queue_item_id !== entry.item.queue_item_id) {
                           await setQueueItemStatus(prev.item.queue_item_id, 'played');
+                          if (!valid()) return;
                         }
                         await setQueueItemStatus(entry.item.queue_item_id, 'playing');
+                        if (!valid()) return;
                         await updatePlaybackState(session.session_id, {
                           current_item_id: entry.item.queue_item_id,
                           is_playing: true,
@@ -813,13 +871,14 @@ export default function PackDeck() {
                 {(entry.item.status === 'queued' || entry.item.status === 'playing') && (
                   <Pressable
                     className="rounded-full border border-line px-2.5 py-[5px]"
-                    disabled={busy}
+                    disabled={busy || !isActiveSession}
                     onPress={() =>
-                      void run(async () => {
+                      void run(async valid => {
                         await setQueueItemStatus(
                           entry.item.queue_item_id,
                           entry.item.status === 'playing' ? 'skipped' : 'removed'
                         );
+                        if (!valid()) return;
                         if (playback?.current_item_id === entry.item.queue_item_id) {
                           await updatePlaybackState(session.session_id, {
                             current_item_id: null,
@@ -888,9 +947,9 @@ export default function PackDeck() {
               </Text>
               <Pressable
                 className="rounded-full border border-line px-2.5 py-[5px]"
-                disabled={busy}
+                disabled={busy || !isActiveSession}
                 onPress={() =>
-                  void run(async () => {
+                  void run(async valid => {
                     if (!myId) throw new Error('Not signed in.');
                     const appleId = t.providerIds.apple;
                     if (!appleId) throw new Error('That result has no Apple Music ID.');
@@ -902,7 +961,7 @@ export default function PackDeck() {
                       album: t.album,
                       durationMs: t.durationMs,
                       artworkUrl: t.artworkUrl,
-                    });
+                    }, undefined, valid);
                     await loadQueue(session.session_id);
                   }, `Added ${t.title} to the queue.`)
                 }
@@ -956,9 +1015,9 @@ export default function PackDeck() {
               />
               <Pressable
                 className={`items-center rounded-[10px] bg-accent py-[11px] ${busy ? 'opacity-60' : ''}`}
-                disabled={busy}
+                disabled={busy || !isActiveSession}
                 onPress={() =>
-                  void run(async () => {
+                  void run(async valid => {
                     if (!myId) throw new Error('Not signed in.');
                     if (!trackTitle.trim() || !trackArtist.trim()) {
                       throw new Error('Enter a title and artist.');
@@ -970,7 +1029,8 @@ export default function PackDeck() {
                         `manual-${myId.slice(0, 6)}-${Date.now()}`,
                       title: trackTitle.trim(),
                       artist: trackArtist.trim(),
-                    });
+                    }, undefined, valid);
+                    if (!valid()) return;
                     setTrackTitle('');
                     setTrackArtist('');
                     setTrackProviderId('');
@@ -985,7 +1045,7 @@ export default function PackDeck() {
         </View>
 
         {/* INVITE FRIENDS */}
-        {isHost && friends.length > 0 && (
+        {isHost && isActiveSession && friends.length > 0 && (
           <View className="gap-2 rounded-[14px] border border-line bg-panel p-3.5">
             <Text className="mb-1 text-[12px] font-bold tracking-[1.5px] text-accent">
               INVITE FRIENDS
@@ -995,7 +1055,7 @@ export default function PackDeck() {
                 <Pressable
                   key={f.friend.user_id}
                   className="flex-row items-center justify-between rounded-[10px] border border-line p-2.5"
-                  disabled={busy}
+                  disabled={busy || !isActiveSession}
                   onPress={() => handleInviteFriend(session, f.friend!.user_id)}
                 >
                   <Text className="text-[14px] text-fog">@{f.friend.username}</Text>
@@ -1010,15 +1070,13 @@ export default function PackDeck() {
   }
 
   // ---------- SESSIONS HOME ----------
-  const activeRow = activeSession
-    ? mySessions.find((s) => s.session_id === activeSession.session_id)
-    : undefined;
+  const activeRow = activeSession;
   return (
     <ScrollView className="flex-1 bg-ink" contentContainerClassName="gap-3.5 px-5 py-5">
       <View className="flex-row items-center justify-between">
         <Text className="text-[15px] font-extrabold tracking-[1.5px] text-fog">PACK</Text>
         <Pressable
-          onPress={() => void refresh()}
+          onPress={() => { void refreshActiveSession(); void refresh(); }}
           className="rounded-full border border-line px-3 py-1.5"
           disabled={busy}
         >
@@ -1028,10 +1086,13 @@ export default function PackDeck() {
       <Text className="text-[12px] text-muted">
         Signed in as @{auth.profile?.username ?? '...'}
       </Text>
+      {membershipError && <Text className="text-[13px] text-danger">{membershipError}</Text>}
       {error && <Text className="text-[13px] text-danger">{error}</Text>}
       {info && <Text className="text-[13px] text-accent">{info}</Text>}
       {loading && <ActivityIndicator color={ACCENT} />}
 
+      {activeSession && <Text className="text-[13px] text-muted">{MEMBERSHIP_CONFLICT_MESSAGE}{activeSession.host_id === myId ? ' Hosts must end or cancel their session first.' : ''}</Text>}
+      {membershipLoading && <Text className="text-[13px] text-muted">Checking current session…</Text>}
       {activeRow && (
         <Pressable
           className="gap-1 rounded-[14px] border border-accent bg-panel p-3.5"
@@ -1053,6 +1114,7 @@ export default function PackDeck() {
 
       <Pressable
         className="items-center rounded-[12px] bg-accent py-3"
+        disabled={busy || membershipLoading || !!membershipError || !!activeSession}
         onPress={() => setShowCreate((v) => !v)}
       >
         <Text className="text-[15px] font-extrabold text-ink">
@@ -1159,7 +1221,7 @@ export default function PackDeck() {
           <Pressable
             className={`items-center rounded-[10px] bg-accent py-[11px] ${busy ? 'opacity-60' : ''}`}
             onPress={handleCreate}
-            disabled={busy}
+            disabled={busy || membershipLoading || !!membershipError || !!activeSession}
           >
             <Text className="text-[14px] font-extrabold text-ink">Create session</Text>
           </Pressable>
@@ -1212,12 +1274,12 @@ export default function PackDeck() {
               <View className="flex-row gap-2">
                 <Pressable
                   className="flex-1 items-center rounded-[10px] bg-accent py-[9px]"
-                  disabled={busy}
+                  disabled={busy || membershipLoading || !!membershipError || (!!activeSession && activeSession.session_id !== invite.session_id)}
                   onPress={() =>
-                    void run(async () => {
+                    void run(async valid => {
+                      if (activeSession && activeSession.session_id !== invite.session_id) throw new Error(MEMBERSHIP_CONFLICT_MESSAGE);
                       await respondToInvite(invite, 'accepted');
-                      const joined = inviteSessions[invite.session_id];
-                      if (joined) setActiveSession(joined);
+                      if (valid()) await refreshActiveSession();
                     }, 'Invite accepted. You are in, and this is your active session.')
                   }
                 >
@@ -1227,7 +1289,7 @@ export default function PackDeck() {
                   className="flex-1 items-center rounded-[10px] border border-line py-[9px]"
                   disabled={busy}
                   onPress={() =>
-                    void run(async () => {
+                    void run(async valid => {
                       await respondToInvite(invite, 'declined');
                     }, 'Invite declined.')
                   }
@@ -1257,7 +1319,7 @@ export default function PackDeck() {
             </View>
             <Pressable
               className="rounded-full bg-accent px-3.5 py-1.5"
-              disabled={busy}
+              disabled={busy || membershipLoading || !!membershipError || (!!activeSession && activeSession.session_id !== session.session_id)}
               onPress={() => handleJoin(session)}
             >
               <Text className="text-[12px] font-extrabold text-ink">Join</Text>
@@ -1279,7 +1341,7 @@ export default function PackDeck() {
                   className="flex-1 items-center rounded-[10px] bg-accent py-[8px]"
                   disabled={busy}
                   onPress={() =>
-                    void run(async () => {
+                    void run(async valid => {
                       await respondToFriendRequest(myId, r.friend!.user_id, true);
                     }, 'Friend added.')
                   }
@@ -1290,7 +1352,7 @@ export default function PackDeck() {
                   className="flex-1 items-center rounded-[10px] border border-line py-[8px]"
                   disabled={busy}
                   onPress={() =>
-                    void run(async () => {
+                    void run(async valid => {
                       await respondToFriendRequest(myId, r.friend!.user_id, false);
                     }, 'Request declined.')
                   }
@@ -1339,7 +1401,7 @@ export default function PackDeck() {
                 className="rounded-full border border-line px-2.5 py-[5px]"
                 disabled={busy}
                 onPress={() =>
-                  void run(async () => {
+                  void run(async valid => {
                     await sendFriendRequest(myId, p.user_id);
                   }, `Request sent to @${p.username}.`)
                 }

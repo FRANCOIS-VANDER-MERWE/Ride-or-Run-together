@@ -1,0 +1,88 @@
+import React from 'react';
+import { Pressable } from 'react-native';
+import { act, create, type ReactTestRenderer, type ReactTestInstance } from 'react-test-renderer';
+import { beforeEach, afterEach, test, expect, vi } from 'vitest';
+import { ride, deferred } from '../../../tests/fixtures';
+const m = vi.hoisted(() => ({ current: null as any, userId: 'user', fetchMine: vi.fn(), fetchDiscover: vi.fn(), fetchInvites: vi.fn(), fetchSession: vi.fn(), join: vi.fn(), create: vi.fn(), respond: vi.fn(), leave: vi.fn(), refresh: vi.fn(), set: vi.fn(), participants: vi.fn(), queue: vi.fn(), playback: vi.fn(), latest: vi.fn(), startSharing: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn() }));
+vi.mock('../../auth/AuthProvider', () => ({ useAuth: () => ({ configured: true, user: { id: m.userId }, profile: { username: 'tester' } }) }));
+vi.mock('../../session/ActiveSessionContext', () => ({ useActiveSession: () => ({ activeSession: m.current, setActiveSession: m.set, refreshActiveSession: m.refresh, membershipLoading: false, membershipError: null, participationKey: m.current?.session_id ?? null }) }));
+vi.mock('../../services/sessionsService', () => ({ MEMBERSHIP_CONFLICT_MESSAGE: 'You are already in a session. Leave your current session before joining another.', createSession: (...x: unknown[]) => m.create(...x), fetchMySessions: (...x: unknown[]) => m.fetchMine(...x), fetchDiscoverableSessions: () => m.fetchDiscover(), fetchMyInvites: () => m.fetchInvites(), fetchSession: () => m.fetchSession(), fetchParticipants: () => m.participants(), joinSession: () => m.join(), respondToInvite: () => m.respond(), setMyParticipantStatus: () => m.leave(), setSessionRoute: vi.fn(), setSessionStatus: vi.fn(), sendInvite: vi.fn() }));
+vi.mock('../../services/friendsService', () => ({ fetchFriends: async () => [], fetchIncomingRequests: async () => [], respondToFriendRequest: vi.fn(), sendFriendRequest: vi.fn() }));
+vi.mock('../../services/profilesService', () => ({ fetchProfile: async () => ({ username: 'rider' }), searchProfilesByUsername: async () => [] }));
+vi.mock('../../services/rideDataService', () => ({ createRoute: vi.fn(), fetchLatestPings: () => m.latest(), fetchRoutes: async () => [] }));
+vi.mock('../../services/liveLocationService', () => ({ startLocationSharing: (...x: unknown[]) => m.startSharing(...x), subscribeToLocationFixes: () => () => {}, releaseLocationChannel: async () => {} }));
+vi.mock('../../services/musicDataService', () => ({ fetchSessionQueueWithTracks: () => m.queue(), fetchPlaybackState: () => m.playback(), enqueueTrack: vi.fn(), setQueueItemStatus: vi.fn(), updatePlaybackState: vi.fn() }));
+vi.mock('../../services/supabaseClient', () => ({ subscribeToTableChanges: (...x: unknown[]) => m.subscribe(...x), unsubscribeChannel: (...x: unknown[]) => m.unsubscribe(...x) }));
+vi.mock('../../music/appleMusicApi', () => ({ searchAppleCatalog: async () => [] }));
+vi.mock('../RoutePlanner', () => ({ default: () => null }));
+import PackDeck from '../PackDeck';
+let root: ReactTestRenderer;
+const text = (node: ReactTestInstance | string): string => typeof node === 'string' ? node : node.children.map(text).join('');
+const button = (label: string) => root.root.findAllByType(Pressable).find(n => text(n).includes(label))!;
+const screen = () => text(root.root);
+const press = async (label: string) => { await act(async () => { await button(label).props.onPress(); }); };
+const mount = async () => { await act(async () => { root = create(<PackDeck />); }); };
+beforeEach(() => {
+  vi.clearAllMocks(); m.userId = 'user'; m.current = ride('A'); m.fetchMine.mockResolvedValue([ride('A')]); m.fetchDiscover.mockResolvedValue([ride('B')]);
+  m.fetchInvites.mockResolvedValue([{ invite_id: 'invite', session_id: 'B', status: 'pending' }]); m.fetchSession.mockResolvedValue(ride('B'));
+  m.participants.mockResolvedValue([]); m.queue.mockResolvedValue([]); m.playback.mockResolvedValue(null); m.latest.mockResolvedValue(new Map());
+  m.refresh.mockResolvedValue(undefined); m.join.mockResolvedValue({}); m.leave.mockResolvedValue(undefined);
+  m.subscribe.mockReturnValue(null); m.unsubscribe.mockResolvedValue(undefined);
+});
+afterEach(async () => { if (root) await act(async () => root.unmount()); });
+test('known A disables Discover B, invitation B and creation, with a path back to A', async () => {
+  await mount();
+  expect(button('Join').props.disabled).toBe(true);
+  expect(button('Accept').props.disabled).toBe(true);
+  expect(button('New session').props.disabled).toBe(true);
+  expect(screen()).toContain('Leave your current session');
+  expect(button('YOUR ACTIVE SESSION')).toBeDefined();
+});
+test('stale local state reports server rejection without false joined success', async () => {
+  m.current = null; m.fetchMine.mockResolvedValue([]);
+  m.join.mockRejectedValue(new Error('You are already in a session. Leave your current session before joining another.'));
+  await mount(); await press('Join');
+  expect(screen()).toContain('Leave your current session');
+  expect(screen()).not.toContain('Joined B');
+  expect(m.set).not.toHaveBeenCalled();
+});
+test('failed leave preserves the room and current membership; successful leave closes after release', async () => {
+  m.leave.mockRejectedValueOnce(new Error('Leave failed'));
+  await mount(); await press('YOUR ACTIVE SESSION'); await press('Leave session');
+  expect(screen()).toContain('Leave failed');
+  expect(button('Leave session')).toBeDefined();
+  expect(m.set).not.toHaveBeenCalledWith(null);
+  await press('Leave session');
+  expect(root.root.findAllByType(Pressable).some(n => text(n).includes('Leave session'))).toBe(false);
+});
+test('closing before riders load prevents obsolete queue and location setup', async () => {
+  const riders = deferred<any[]>(); m.participants.mockReturnValue(riders.promise);
+  await mount();
+  await act(async () => { void button('YOUR ACTIVE SESSION').props.onPress(); });
+  await press('‹ Sessions');
+  await act(async () => riders.resolve([]));
+  expect(m.queue).not.toHaveBeenCalled();
+  expect(m.latest).not.toHaveBeenCalled();
+});
+test('delayed A channel removal cannot clear B queue', async () => {
+  const removed = deferred<void>();
+  m.subscribe.mockImplementation((table, options) => ({ table, sessionId: options.sessionId }));
+  m.unsubscribe.mockImplementation(channel => channel.sessionId === 'A' ? removed.promise : Promise.resolve());
+  await mount(); await press('YOUR ACTIVE SESSION');
+  await act(async () => { void button('‹ Sessions').props.onPress(); });
+  m.current = ride('B'); m.fetchMine.mockResolvedValue([ride('B')]);
+  m.queue.mockResolvedValue([{ item: { queue_item_id: 'b-track', position: 1, status: 'queued' }, track: { title: 'B track', artist: 'Artist' } }]);
+  await act(async () => root.update(<PackDeck />));
+  await press('YOUR ACTIVE SESSION');
+  expect(screen()).toContain('B track');
+  await act(async () => removed.resolve());
+  expect(screen()).toContain('B track');
+});
+test('history remains readable without activation, publishing or live subscriptions', async () => {
+  m.current = null; m.fetchMine.mockResolvedValue([{ ...ride('Past ride', 'user'), status: 'completed' }]);
+  await mount(); await press('Past ride');
+  expect(screen()).toContain('Session history');
+  expect(screen()).not.toContain('Make this my active session');
+  expect(m.subscribe).not.toHaveBeenCalled(); expect(m.latest).not.toHaveBeenCalled(); expect(m.startSharing).not.toHaveBeenCalled();
+  expect(m.set).not.toHaveBeenCalled();
+});

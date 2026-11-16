@@ -246,11 +246,13 @@ type InsertOf<Row, Required extends keyof Row> = Pick<Row, Required> &
   Partial<Omit<Row, Required>>;
 type UpdateOf<Row> = Partial<Row>;
 
-interface TableDef<Row, Required extends keyof Row> {
+interface TableDef<Row, Required extends keyof Row, Relationships extends {
+  foreignKeyName: string; columns: string[]; isOneToOne: boolean; referencedRelation: string; referencedColumns: string[];
+}[] = []> {
   Row: Row;
   Insert: InsertOf<Row, Required>;
   Update: UpdateOf<Row>;
-  Relationships: [];
+  Relationships: Relationships;
 }
 
 export type Database = {
@@ -274,7 +276,8 @@ export type Database = {
       ride_sessions: TableDef<RideSessionRow, 'host_id' | 'title'>;
       session_participants: TableDef<
         SessionParticipantRow,
-        'session_id' | 'user_id'
+        'session_id' | 'user_id',
+        [{ foreignKeyName: 'session_participants_session_id_fkey'; columns: ['session_id']; isOneToOne: false; referencedRelation: 'ride_sessions'; referencedColumns: ['session_id'] }]
       >;
       session_invites: TableDef<
         SessionInviteRow,
@@ -292,11 +295,13 @@ export type Database = {
       playlists: TableDef<PlaylistRow, 'owner_id' | 'name'>;
       playlist_tracks: TableDef<
         PlaylistTrackRow,
-        'playlist_id' | 'position' | 'track_id'
+        'playlist_id' | 'position' | 'track_id',
+        [{ foreignKeyName: 'playlist_tracks_track_id_fkey'; columns: ['track_id']; isOneToOne: false; referencedRelation: 'tracks'; referencedColumns: ['track_id'] }]
       >;
       session_queue: TableDef<
         SessionQueueRow,
-        'session_id' | 'track_id' | 'position'
+        'session_id' | 'track_id' | 'position',
+        [{ foreignKeyName: 'session_queue_track_id_fkey'; columns: ['track_id']; isOneToOne: false; referencedRelation: 'tracks'; referencedColumns: ['track_id'] }]
       >;
       session_playback_state: TableDef<
         SessionPlaybackStateRow,
@@ -304,7 +309,13 @@ export type Database = {
       >;
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      create_session: { Args: { p_input: Json }; Returns: RideSessionRow };
+      join_session: { Args: { p_session_id: string; p_bike_id?: string }; Returns: SessionParticipantRow };
+      set_session_status: { Args: { p_session_id: string; p_status: SessionStatus }; Returns: undefined };
+      set_participant_status: { Args: { p_session_id: string; p_status: ParticipantStatus }; Returns: undefined };
+      respond_to_session_invite: { Args: { p_invite_id: string; p_response: InviteStatus }; Returns: undefined };
+    };
     Enums: {
       friendship_status: FriendshipStatus;
       invite_status: InviteStatus;

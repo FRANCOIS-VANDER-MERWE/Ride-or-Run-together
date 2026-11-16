@@ -20,6 +20,7 @@ import { Image, Pressable, ScrollView, Text, View } from 'react-native';
 import Svg, { Polyline } from 'react-native-svg';
 import * as Location from 'expo-location';
 import { Music2, Pause, Play } from 'lucide-react-native';
+import { runSessionAudio } from '../music/sessionAudio';
 import { useAuth } from '../auth/AuthProvider';
 import { useActiveSession } from '../session/ActiveSessionContext';
 import { fetchParticipants } from '../services/sessionsService';
@@ -104,9 +105,17 @@ export default function ComplicationsView({
 }) {
   const auth = useAuth();
   const myId = auth.user?.id ?? null;
-  const { activeSession, refreshActiveSession } = useActiveSession();
+  const { activeSession, participationKey, membershipError } = useActiveSession();
   const sessionId = activeSession?.session_id ?? null;
   const isActive = activeSession?.status === 'active';
+  const activityKey = participationKey ?? (sessionId && myId ? `${myId}:${sessionId}` : null);
+  const activityRef = useRef(activityKey);
+  activityRef.current = activityKey;
+  const ownerRef = useRef({ key: activityKey, live: true });
+  if (ownerRef.current.key !== activityKey) ownerRef.current = { key: activityKey, live: true };
+  const activity = ownerRef.current;
+  const playbackRequestRef = useRef(0);
+  const intervalStartedRef = useRef(Date.now());
 
   const [names, setNames] = useState<Record<string, string>>({});
   const [fixes, setFixes] = useState<Record<string, LiveFix>>({});
@@ -128,14 +137,16 @@ export default function ComplicationsView({
   const [nowPlaying, setNowPlaying] = useState<QueueEntry | null>(null);
 
   const lastPosRef = useRef<LatLng | null>(null);
-  const watchRef = useRef<Location.LocationSubscription | null>(null);
-  const shareRef = useRef<LocationSharingHandle | null>(null);
-  const shareSessionRef = useRef<string | null>(null);
-
   // --- session data: names, route, playback ---
   useEffect(() => {
-    void refreshActiveSession();
-  }, [refreshActiveSession]);
+    activity.live = true;
+    setNames({}); setFixes({}); setMyPos(null); setMySpeed(null); setTrail([]);
+    setDistanceM(0); setRouteLine([]); setRouteName(null); setRouteError(null);
+    setCenter(null); setGpsNote(null); setTileError(false); tileErrorRef.current = false;
+    setPlayback(null); setNowPlaying(null); lastPosRef.current = null;
+    intervalStartedRef.current = Date.now(); setNow(Date.now());
+    return () => { activity.live = false; ++playbackRequestRef.current; };
+  }, [activityKey]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -145,11 +156,12 @@ export default function ComplicationsView({
         const riders = await fetchParticipants(sessionId);
         const map: Record<string, string> = {};
         for (const r of riders) {
-          if (r.status === 'left') continue;
+          if (!['joined', 'riding', 'paused'].includes(r.status)) continue;
           const profile = await fetchProfile(r.user_id);
+          if (!live || !activity.live || activityRef.current !== activityKey) return;
           map[r.user_id] = profile?.username ?? r.user_id.slice(0, 8);
         }
-        if (live) setNames(map);
+        if (live && activity.live && activityRef.current === activityKey) setNames(map);
       } catch {
         // names are cosmetic here
       }
@@ -157,7 +169,7 @@ export default function ComplicationsView({
     return () => {
       live = false;
     };
-  }, [sessionId]);
+  }, [sessionId, activityKey]);
 
   useEffect(() => {
     if (!activeSession?.route_id) {
@@ -167,9 +179,10 @@ export default function ComplicationsView({
       return;
     }
     let live = true;
+    setRouteLine([]); setRouteName(null); setRouteError(null);
     void fetchRoute(activeSession.route_id)
       .then((route) => {
-        if (!live) return;
+        if (!live || !activity.live || activityRef.current !== activityKey) return;
         if (!route) {
           setRouteError('The attached route could not be found.');
           return;
@@ -190,7 +203,7 @@ export default function ComplicationsView({
         }
       })
       .catch((err: unknown) => {
-        if (live) {
+        if (live && activity.live && activityRef.current === activityKey) {
           setRouteError(
             err instanceof Error ? err.message : 'Route failed to load.'
           );
@@ -199,15 +212,17 @@ export default function ComplicationsView({
     return () => {
       live = false;
     };
-  }, [activeSession?.route_id]);
+  }, [activeSession?.route_id, activityKey]);
 
   const refreshPlayback = useCallback(async () => {
     if (!sessionId) return;
+    const request = ++playbackRequestRef.current;
     try {
       const [entries, state] = await Promise.all([
         fetchSessionQueueWithTracks(sessionId),
         fetchPlaybackState(sessionId),
       ]);
+      if (!activity.live || activityRef.current !== activityKey || request !== playbackRequestRef.current) return;
       setPlayback(state);
       setNowPlaying(
         entries.find((e) => e.item.queue_item_id === state?.current_item_id) ??
@@ -216,7 +231,7 @@ export default function ComplicationsView({
     } catch {
       // music line is best effort on this screen
     }
-  }, [sessionId]);
+  }, [sessionId, activityKey]);
 
   useEffect(() => {
     void refreshPlayback();
@@ -236,7 +251,7 @@ export default function ComplicationsView({
     let live = true;
     void fetchLatestPings(sessionId)
       .then((latest) => {
-        if (!live) return;
+        if (!live || !activity.live || activityRef.current !== activityKey) return;
         setFixes((prev) => {
           const next = { ...prev };
           for (const [userId, ping] of latest) {
@@ -255,21 +270,23 @@ export default function ComplicationsView({
       })
       .catch(() => {});
     const unsubscribe = subscribeToLocationFixes(sessionId, (fix) => {
+      if (!live || !activity.live || activityRef.current !== activityKey) return;
       setFixes((prev) => ({ ...prev, [fix.userId]: fix }));
     });
     return () => {
       live = false;
       unsubscribe();
     };
-  }, [sessionId, myId]);
+  }, [sessionId, myId, activityKey]);
 
   // --- own GPS: stats, trail, and sharing to the pack ---
   useEffect(() => {
     if (!sessionId || !myId) return;
     let live = true;
     let poll: ReturnType<typeof setInterval> | null = null;
+    let watcher: Location.LocationSubscription | null = null;
     const applyFix = (loc: Location.LocationObject) => {
-      if (!live) return;
+      if (!live || !activity.live || activityRef.current !== activityKey) return;
       const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
       setMyPos(pos);
       setMySpeed(loc.coords.speed ?? null);
@@ -292,7 +309,7 @@ export default function ComplicationsView({
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (!live) return;
+        if (!live || !activity.live || activityRef.current !== activityKey) return;
         if (status !== 'granted') {
           setGpsNote(
             'Location permission is off, so your stats and pack position cannot update.'
@@ -315,9 +332,9 @@ export default function ComplicationsView({
         } catch {
           // The watcher or poll below will keep trying.
         }
-        if (!live) return;
+        if (!live || !activity.live || activityRef.current !== activityKey) return;
         try {
-          watchRef.current = await Location.watchPositionAsync(
+          const handle = await Location.watchPositionAsync(
             {
               accuracy: Location.Accuracy.Balanced,
               distanceInterval: 3,
@@ -325,7 +342,10 @@ export default function ComplicationsView({
             },
             applyFix
           );
+          if (!live || !activity.live || activityRef.current !== activityKey) handle.remove();
+          else watcher = handle;
         } catch {
+          if (!live || !activity.live || activityRef.current !== activityKey) return;
           // Some web environments reject watchers; poll instead.
           poll = setInterval(() => {
             void Location.getCurrentPositionAsync({
@@ -336,7 +356,7 @@ export default function ComplicationsView({
           }, 4000);
         }
       } catch (err) {
-        if (live) {
+        if (live && activity.live && activityRef.current === activityKey) {
           setGpsNote(
             err instanceof Error ? `GPS error: ${err.message}` : 'GPS unavailable on this device.'
           );
@@ -346,28 +366,21 @@ export default function ComplicationsView({
     return () => {
       live = false;
       if (poll) clearInterval(poll);
-      watchRef.current?.remove();
-      watchRef.current = null;
+      watcher?.remove();
     };
-  }, [sessionId, myId]);
+  }, [sessionId, myId, activityKey]);
 
   useEffect(() => {
     if (!isActive || !sessionId || !myId) return;
-    if (shareSessionRef.current === sessionId) return;
-    shareSessionRef.current = sessionId;
-    void startLocationSharing(sessionId, myId, (reason) => setGpsNote(reason)).then(
-      (handle) => {
-        shareRef.current = handle;
-      }
-    );
-    return () => {
-      if (shareSessionRef.current === sessionId) {
-        shareSessionRef.current = null;
-        void shareRef.current?.stop();
-        shareRef.current = null;
-      }
-    };
-  }, [isActive, sessionId, myId]);
+    let live = true;
+    let handle: LocationSharingHandle | null = null;
+    const valid = () => live && activity.live && activityRef.current === activityKey;
+    void startLocationSharing(sessionId, myId, reason => { if (valid()) setGpsNote(reason); }, valid).then(created => {
+      if (!valid()) { void created?.stop(); return; }
+      handle = created;
+    }).catch(err => { if (valid()) setGpsNote(err instanceof Error ? err.message : 'GPS unavailable.'); });
+    return () => { live = false; void handle?.stop(); };
+  }, [isActive, sessionId, myId, activityKey]);
 
   // --- elapsed clock ---
   useEffect(() => {
@@ -378,7 +391,7 @@ export default function ComplicationsView({
 
   const startedAt = activeSession?.started_at ?? activeSession?.created_at;
   const elapsedMs =
-    isActive && startedAt ? now - new Date(startedAt).getTime() : 0;
+    isActive && startedAt ? Math.max(0, now - Math.max(new Date(startedAt).getTime(), intervalStartedRef.current)) : 0;
   const distanceMi = distanceM / 1609.34;
   const avgMph =
     elapsedMs > 60000 ? distanceMi / (elapsedMs / 3600000) : mph(mySpeed);
@@ -436,12 +449,15 @@ export default function ComplicationsView({
     if (!sessionId) return;
     const next = !(playback?.is_playing ?? false);
     try {
-      if (next) await appleMusicProvider.resume();
-      else await appleMusicProvider.pause();
+      await runSessionAudio(() => activity.live && activityRef.current === activityKey, async () => {
+        if (next) await appleMusicProvider.resume();
+        else await appleMusicProvider.pause();
+      });
     } catch {
       // This phone may not be the one playing; the shared flag below
       // is what the playing phone follows.
     }
+    if (!activity.live || activityRef.current !== activityKey) return;
     await updatePlaybackState(sessionId, { is_playing: next }).catch(() => {});
     void refreshPlayback();
   };
@@ -450,7 +466,7 @@ export default function ComplicationsView({
     return (
       <View className="flex-1 items-center justify-center bg-ink px-6">
         <Text className="text-center text-[20px] font-semibold text-fog">
-          No active session
+          {membershipError ?? 'No active session'}
         </Text>
         <Text className="mt-2 text-center text-[14px] leading-5 text-muted">
           Set up the ride in the Pack tab first. Once a session is active,

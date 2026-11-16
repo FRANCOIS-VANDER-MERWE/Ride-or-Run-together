@@ -1,4 +1,5 @@
-
+-- Base pg_dump snapshot. Install supabase/rls_policies.sql, then the ordered
+-- supabase/migrations/*.sql files. Session lifecycle enforcement lives there.
 
 
 SET statement_timeout = 0;
