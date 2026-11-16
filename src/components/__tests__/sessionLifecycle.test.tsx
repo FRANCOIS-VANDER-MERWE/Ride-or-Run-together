@@ -137,3 +137,22 @@ test('keys map by participation', async () => {
   await act(async () => root.update(<ComplicationsView onNavigate={() => {}} />));
   expect(instance()).not.toBe(first);
 });
+
+test('map recenter targets the latest own fix and preserves the 60 meter follow rule', async () => {
+  let applyFix!: (fix: any) => void;
+  m.permission.mockResolvedValue({ status: 'granted' });
+  m.watch.mockImplementation(async (_options, cb) => { applyFix = cb; return { remove() {} }; });
+  await act(async () => { root = create(<ComplicationsView onNavigate={() => {}} />); });
+  const fix = async (lat: number) => act(async () => applyFix({ coords: { latitude: lat, longitude: 0, speed: 4 } }));
+  const map = () => root.root.findByType('RideMap' as any).props;
+  await fix(0); await fix(0.0003);
+  expect(map().followCenter).toEqual({ lat: 0, lng: 0 });
+  await act(async () => map().onRecenter());
+  expect(map().followCenter).toEqual({ lat: 0.0003, lng: 0 });
+  await fix(0.0006);
+  expect(map().followCenter).toEqual({ lat: 0.0003, lng: 0 });
+  await fix(0.001);
+  expect(map().followCenter).toEqual({ lat: 0.001, lng: 0 });
+  expect(m.watch).toHaveBeenCalledOnce();
+  expect(m.share).toHaveBeenCalledOnce();
+});
