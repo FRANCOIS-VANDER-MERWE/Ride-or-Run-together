@@ -21,6 +21,7 @@ import {
 } from 'react-native';
 import Svg, { Polyline } from 'react-native-svg';
 import * as Location from 'expo-location';
+import { tileUrl, TILE_ATTRIBUTION_LABEL } from './mapTiles';
 
 export interface PlannedRoute {
   name: string;
@@ -243,7 +244,7 @@ export default function RoutePlanner({
         const tx = ((x % max) + max) % max;
         out.push({
           key: `${zoom}/${tx}/${y}`,
-          uri: `https://tile.openstreetmap.org/${zoom}/${tx}/${y}.png`,
+          uri: tileUrl(zoom, tx, y),
           left: x * TILE - (cx - size.w / 2),
           top: y * TILE - (cy - size.h / 2),
         });
@@ -714,7 +715,7 @@ export default function RoutePlanner({
           )}
         </View>
         <Text className="absolute bottom-1 right-2 font-mono text-[9px] text-black/60">
-          © OpenStreetMap
+          {TILE_ATTRIBUTION_LABEL}
         </Text>
       </View>
 

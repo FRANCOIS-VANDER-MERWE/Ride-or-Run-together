@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Image, Platform, Pressable, Text, View, type LayoutChangeEvent, type GestureResponderEvent } from 'react-native';
 import Svg, { Polyline } from 'react-native-svg';
 import { DEFAULT_ZOOM, MIN_ZOOM, MAX_ZOOM, TILE_SIZE, clampZoom, getVisibleTiles, panCenter, project, type LatLng } from './rideMapGeometry';
+import { tileUrl, TILE_ATTRIBUTION_LABEL } from './mapTiles';
 
 export interface RideMapProps {
   followCenter: LatLng | null;
@@ -104,7 +105,7 @@ export default function RideMap({ followCenter, myPos, riders, routeLine, trail,
             {tiles.map(t => (
               <Image
                 key={t.key}
-                source={{ uri: `https://tile.openstreetmap.org/${zoom}/${t.column}/${t.row}.png` }}
+                source={{ uri: tileUrl(zoom, t.column, t.row) }}
                 onError={() => {
                   if (!tileErrorRef.current) {
                     tileErrorRef.current = true;
@@ -188,7 +189,7 @@ export default function RideMap({ followCenter, myPos, riders, routeLine, trail,
               <Text className="text-[11px] font-bold text-fog">Go to route</Text>
             </Pressable>
           )}
-          <Text pointerEvents="none" className="absolute bottom-1 right-2 font-mono text-[9px] text-black/60">© OpenStreetMap</Text>
+          <Text pointerEvents="none" className="absolute bottom-1 right-2 font-mono text-[9px] text-black/60">{TILE_ATTRIBUTION_LABEL}</Text>
         </>
       ) : (
         <View className="flex-1 items-center justify-center px-6">

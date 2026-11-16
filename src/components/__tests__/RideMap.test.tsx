@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 vi.mock('react-native-svg', () => ({ default: 'Svg', Polyline: 'Polyline' }));
 import RideMap, { type RideMapProps } from '../RideMap';
 import { panCenter, project, getVisibleTiles, type LatLng } from '../rideMapGeometry';
+import { tileUrl } from '../mapTiles';
 
 let root: ReactTestRenderer;
 const origin = { lat: 0, lng: 0 };
@@ -67,7 +68,7 @@ const update = async (props: RideMapProps, key = 'A') => {
 const marker = (label: string) => root.root.findAllByType('Text' as any).find(n => text(n) === label)!.parent!;
 const expectViewport = (camera: LatLng, zoom: number, props: RideMapProps, size = { w: 512, h: 300 }) => {
   const tiles = getVisibleTiles(camera, size, zoom);
-  expect(images().map(i => i.props.source.uri)).toEqual(tiles.map(t => `https://tile.openstreetmap.org/${zoom}/${t.column}/${t.row}.png`));
+  expect(images().map(i => i.props.source.uri)).toEqual(tiles.map(t => tileUrl(zoom, t.column, t.row)));
   images().forEach((image, index) => {
     expect(image.props.style.left).toBeCloseTo(tiles[index].left, 6);
     expect(image.props.style.top).toBeCloseTo(tiles[index].top, 6);

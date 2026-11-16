@@ -5,7 +5,7 @@
  *
  * - Your live stats up top: speed (big), elapsed time, distance,
  *   average speed, all from this phone's GPS.
- * - A real map (OpenStreetMap tiles) with the session's planned route
+ * - A real map (Esri World Street Map tiles) with the planned route
  *   drawn on it, your ridden trail, and a marker per rider at their
  *   latest live fix.
  * - A rider strip with everyone's current speed.
